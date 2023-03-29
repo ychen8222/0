@@ -1,0 +1,43 @@
+;贩夫贩妇fffsfswSFSAFA
+
+
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
+xor ax,ax
