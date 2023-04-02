@@ -1,0 +1,289 @@
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>HTML5 </title>
+<style>
+body {
+padding: 1em;
+padding-bottom: 2em;
+max-width: 35em;
+margin: auto;
+font-size: 14px;
+line-height: 1.4;
+}
+
+ h1 {
+        display: block;
+        margin: 0 0 0.5em;
+    }
+
+        h1 svg {
+            margin: 0;
+        }
+
+    p {
+        margin: 0 0 1em;
+    }
+
+    a {
+        color: #f05555;
+    }
+
+    img {
+        vertical-align: middle;
+    }
+
+    button {
+        background: #ddd;
+        border: none;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        appearance: none;
+    }
+
+    button,
+    input[type=file] {
+        padding: 0.5em;
+        cursor: pointer;
+    }
+
+    svg,
+    label,
+    input[type=file] {
+        display: block;
+        margin: 1em auto;
+        text-align: center;
+    }
+
+        label small {
+            display: block;
+        }
+
+    svg {
+        max-width: 100%;
+    }
+
+    .choices {
+        background: #eee;
+        display: -webkit-box;
+        display: -webkit-flex;
+        display: -ms-flexbox;
+        display: flex;
+        -webkit-box-align: stretch;
+        -webkit-align-items: stretch;
+        -ms-flex-align: stretch;
+        align-items: stretch;
+    }
+
+        .choices > * {
+            -webkit-box-flex: 1;
+            -webkit-flex: 1 1 50%;
+            -ms-flex: 1 1 50%;
+            flex: 1 1 50%;
+        }
+
+    .download,
+    .outputSize {
+        display: inline-block;
+        text-align: center;
+        margin: 1em auto 0;
+        padding: 0.25em 0.5em;
+        font-size: 0.8em;
+    }
+
+    .download {
+        background-color: #f05555;
+        color: #fff;
+    }
+
+    #output {
+        text-align: center;
+    }
+
+    #outputRaw {
+        display: block;
+        background: #eee;
+        white-space: pre-wrap;
+        padding: 0.5em;
+        font-size: 0.75em;
+    }
+
+    .inspired {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        padding: 0.5em;
+        width: 100%;
+        background: #fff;
+        background: rgba(255, 255, 255, 0.8);
+        text-align: center;
+    }
+</style>
+ </head>
+<body>
+<h1>
+
+</h1>
+<p>
+Need a pixel-perfect scalable image, but all you have is a low-res GIF? You could use <a href="https://css-tricks.com/almanac/properties/i/image-rendering/" target="_blank"><code>image-rendering: pixelated</code></a> and hope the browser will scale it
+right, or you could use this tool to convert a raster image to SVG.
+</p>
+<p>
+Each color is merged into one <code>path</code>, optimized for combining horizontal runs where possible to keep file size down. Works best with 8-bit images, or graphics where colors are limited and the dimensions are relatively small. Large or complex
+images may lock the browser.
+</p>
+<div class="choices">
+<input type="file" id="upload" />
+
+ 
+ <button id="test">
+        or try with a test image:
+        <img src=""
+            id="testImage" />
+    </button>
+</div>
+<!--<label><input type="checkbox" id="includeDimensions" /> Include width/height on SVG? <small>viewBox will always be included, but omitting the width/height allows the SVG to scale</small></label>-->
+<div id="output"></div>
+<pre contenteditable="true" id="outputRaw"></pre>
+<div class="inspired">
+    <em>Inspired by <a href="https://github.com/meyerweb/px2svg" target="_blank">px2svg</a></em>
+</div>
+<script>
+    console.clear();
+    function each(obj, callback) {
+        var length = obj.length,
+            likeArray = (length === 0 || (length > 0 && (length - 1) in obj)),
+            i = 0;
+
+        if (likeArray) {
+            for (; i < length; i++) {
+                if (callback.call(obj[i], i, obj[i]) === false) {
+                    break;
+                }
+            }
+        } else {
+            for (i in obj) {
+                if (callback.call(obj[i], i, obj[i]) === false) {
+                    break;
+                }
+            }
+        }
+    }
+    function byteCount(s) {
+        return encodeURI(s).split(/%..|./).length - 1;
+    }
+
+    function componentToHex(c) {
+        var hex = c.toString(16);
+        return hex.length == 1 ? "0" + hex : hex;
+    }
+
+    function getColor(r, g, b, a) {
+        if (a === undefined || a === 255) {
+            return "#" + componentToHex(r) + componentToHex(g) + componentToHex(b);
+        }
+        if (a === 0) {
+            return false;
+        }
+        return 'rgba(' + r + ',' + g + ',' + b + ',' + (a / 255) + ')';
+    }
+    // Optimized for horizontal lines
+    function makePathData(x, y, w) {
+        return ('M' + x + ' ' + y + 'h' + w + '');
+    }
+
+    function path(color, data) {
+        return '<path stroke="' + color + '" d="' + data + '" />\n';
+    }
+
+    var canvas = document.createElement("canvas");
+    var ctx = canvas.getContext("2d");
+
+    var uploader = document.getElementById('upload');
+    var outputDiv = document.getElementById('output');
+    var outputRaw = document.getElementById('outputRaw');
+
+    function processImage(src) {
+        var img = new Image();
+
+        img.onload = function () {
+            var width = img.width;
+            var height = img.height;
+
+            canvas.width = width;
+            canvas.height = height;
+            ctx.drawImage(img, 0, 0);
+
+            // viewBox starts at -0.5 to accomodate stroke's middle-origin to prevent having to include 0.5 on each path move
+            var output = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -0.5 ' + width + ' ' + height + '" shape-rendering="crispEdges">\n';
+
+            var colors = {},
+                x = 0,
+                y = 0,
+                p, color;
+
+            for (y = 0; y < height; y++) {
+                for (x = 0; x < width; x++) {
+                    p = ctx.getImageData(x, y, 1, 1).data;
+                    color = getColor(p[0], p[1], p[2], p[3]);
+                    if (color) {
+                        colors[color] = colors[color] || [];
+                        colors[color].push([x, y]);
+                    }
+                }
+            }
+
+            // Loop through each color
+            each(colors, function (i, value) {
+                if (i === false) {
+                    return;
+                }
+                var paths = [];
+                var curPath;
+                var w = 1;
+
+                // Loops through each color's pixels to optimize paths
+                each(value, function () {
+
+                    if (curPath && this[1] === curPath[1] && this[0] === (curPath[0] + w)) {
+                        w++;
+                    } else {
+                        if (curPath) {
+                            paths.push(makePathData(curPath[0], curPath[1], w));
+                            w = 1;
+                        }
+                        curPath = this;
+                    }
+
+                });
+                paths.push(makePathData(curPath[0], curPath[1], w)); // Finish last path
+
+                output += path(i, paths.join(''));
+            });
+
+            output += '</svg>';
+
+            outputDiv.innerHTML = '<em class="outputSize">Output size (bytes): ' + byteCount(output) + '</em>' + '<a href="data:Application/octet-stream,' + encodeURIComponent(output) + '" download="pixels.svg"><span class="download">Download SVG</span>' + output + '</a>';
+            outputRaw.innerHTML = output.replace(/</g, '<').replace(/>/g, '>');
+        }
+        img.src = (src.target ? src.target.result : src);
+    }
+
+    function loadImage(e) {
+        var reader = new FileReader();
+        reader.onload = processImage;
+
+        file = (e.target.files || uploader.files)[0];
+
+        if (file) {
+            reader.readAsDataURL(file);
+        }
+    }
+    uploader.onclick = uploader.onchange = loadImage;
+    var test = document.getElementById('test');
+    var testImage = document.getElementById('testImage');
+    test.onclick = function () {
+        processImage(testImage.src);
+    }
+</script>
