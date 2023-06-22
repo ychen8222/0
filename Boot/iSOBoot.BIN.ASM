@@ -1,4 +1,4 @@
-;======================================================================
+;============================================================================
 ;iso文件系统的引导扇区
 
 ;2023年3月
@@ -9,159 +9,176 @@
 ;添加检索文件夹\
 @cya
 
-;4月12日
-;尝试添加iso9660的变体Joliet极有可能会失败\
-@cya
+;6月22日
+;支持iso9660的变体Joliet
+;@cya
 
 ;4月12日
 ;尝试支持UDFS以失败告终\
 @cya
-;————————————————————————————————————
+;----------------------------------------------------------------------------
 ;内存布局
 ;7C00～？_isoboot.BIN
 ;500~？_卷描述符
 org 7c00h;基地址
-jmp 初始化寄存器
+jmp 初始化寄存器;BPB？
 nop
-mainLBA dd 0
-范围大小 dd 0
+rootLBA dd 0
+根大小 dd 0
 
 初始化寄存器:
-xor Ax,Ax
+mov ax,0
 mov Ds,Ax;数据段DS：BX，SI，DI，BP
 mov Ss,Ax;堆栈段SS：SP
-mov Ax,50h;500，用于解析文件系统
+mov Ax,50h;500，用于解析文件系统，不能使用7e00，因为我们的引导扇区是未知长度
 mov Es,Ax
 mov Sp,7c00h
 
-mov Ds:[驱动器号],dl;来自biso
+mov Ds:[驱动器号],dl;来自BISO
 mov Ax,4b01h;获取光盘仿真状态，与AX=4B00h相同但不终止仿真
 ;mov dl驱动器号已存在
 mov Si,Sp;将其放置于栈
 int 13h
 jc 错误集群_BIOS;遇到错误cf被设置
-cmp byte Ds:[Si+1],0
+cmp byte Ds:[Si+1],0;模拟软盘
 jnz 错误集群_光盘
 mov al,[Si+2],;Ds：Si规格包已填充
 cmp Ds:[驱动器号],al;驱动器号应该相同
 jnz 错误集群_BIOS;我们被BIOS骗了
 
+
+
 mov EAx,16;从16扇区开始检索
 mov Bx,Es;读到的位置
-mov cx,20
+mov bp,0FFh;循环次数
+
 下一个卷:
-push cx
-push EAx
-call 读盘
-pop EAx
-inc EAx;准备取下一个卷
-mov Si,扩展描述符
-xor Di,Di
-mov Cx,5h
-repe cmpsb
-jcxz 标记_？_循环起始
-mov Si,Joliet
-xor Di,Di
-mov Cx,6h
-repe cmpsb
-jcxz 标记_Joliet_循环起始
-;cmp byte Es:[0],0FFh;最后一个卷
-;jnz 下一个卷
-pop cx
-loop 下一个卷
-
-mov EAx,16;重新读取iso9660的主卷描述符，UDF是个空壳
-mov Bx,Es;读到的位置
-call 读盘
-jmp iso9660
-
-标记_？_循环起始:
-inc sp;桟平衡
-inc sp
-标记_？:
- mov Si,扩展描述符结束
- xor Di,Di
- mov Cx,5h
- repe cmpsb
- jcxz 下一个卷
- mov Si,UDFS
- xor Di,Di
- mov Cx,4h
- repe cmpsb
- jcxz 标记_UDFS
  push EAx
  call 读盘
  pop EAx
  inc EAx;准备取下一个卷
-jmp 标记_？
-标记_UDFS:
-mov eax,256;锚卷描述符指针
-mov bx,es
-call 读盘
-mov byte [类型],2
-mov EAx,Es:[16];止步于此
-mov ECx,Es:[16+4];我不知道任何的结构入大小端或LBA，偏移等
-add ECx,2048-1;应该是这样
-shr ECx,11
 
+ mov si,二卷
+ mov di,0
+ mov cx,6
+ repe cmpsb
+ jnz 不会是Joliet
+ mov Si,Joliet
+ mov Di,58h;偏移，不知道为什么要放在这里
+ mov Cx,3
+ repe cmpsb
+ jz 是Joliet
 
+ 不会是Joliet:
+ dec bp;不能被jz指令跳过
+ cmp byte Es:[0],0FFh;最后一个卷
+ jz 看看扩展卷
 
-
-标记_Joliet_循环起始:
-inc sp;桟平衡
-inc sp
-
-
-cd2:
-mov si,Joliet
-mov di,58h
-mov Cx,3h
-rep cmpsb;前缀随便用的
+ cmp bp,0
 jnz 下一个卷
+jmp iSO9660;終了
+
+
+看看扩展卷:
+push EAx
+call 读盘
+pop EAx
+inc EAx;准备取下一个卷
+
+mov Si,扩展描述符
+mov Di,1;没有序号
+mov Cx,5
+repe cmpsb
+jnz iSO9660;没有扩展卷
+扩展卷循环:
+ push EAx
+ call 读盘
+ pop EAx
+ inc EAx;准备取下一个卷
+
+ mov Si,扩展描述符结束
+ mov Di,1;没有序号
+ mov Cx,5
+ repe cmpsb
+ jz iSO9660;終了
+
+ mov Si,UDFS
+ xor Di,Di
+ mov Cx,4
+ repe cmpsb
+ jz 是UDFS
+
+dec bp
+jnz 扩展卷循环
+
+
+
+iSO9660:
 mov byte [类型],1;下次支持UDF
 
-
-
-
-iso9660:;iso9660，Joliet都采用同样的主卷格式
-mov Si,Es;显示文件系统
-shl Si,4;从段变成偏移
-inc Si;卷描述符描述符前面有个byte表示卷描述符我们跳过他
+mov EAx,16;再读主卷符
+mov Bx,Es;读到的位置
+call 读盘
+mov Si,500h+1;显示文件系统，卷描述符描述符前面有个byte表示卷号
 mov Ax,2020h;两个空格
 mov Ds:[Si+5],Ax;覆盖掉不知道什么东西以免影响显示
 call 打印
 
 mov EAx,Es:[156+2];根目录的目录项+2双端格式的范围位置 (LBA)，2~8÷2
 mov ECx,Es:[156+10];根目录的目录项+10双端格式的数据长度（范围大小）
-mov [mainLBA],eax
-mov [范围大小],ecx
-
+mov [rootLBA],eax;Loader需要的参数
+mov [根大小],ecx
 add ECx,2048-1;扇区大小
 shr ECx,11;÷2048，要读取的扇区数
 
-mov EBx,文件夹名
-mov cr2,EBx;寄存器嘛。。越多越好
+mov si,文件夹名
 mov bP,4;名长度
-call 检索;寻找文件夹
-jc 错误集群_没有文件夹
+call iSO9660_检索
+jc 尝试另一种方式
 mov Si,显示文件夹名
+call 打印
+jmp 找到文件夹
+
+
+尝试另一种方式:
+mov eax,[rootLBA];正好用一下
+mov ecx,[根大小]
+mov si,文件夹名_1
+mov bP,4;名长度
+call iSO9660_检索;寻找文件夹
+jc 错误集群_没有文件夹
+mov Si,显示文件夹名_1
 call 打印
 
 
+找到文件夹:;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 mov EAx,Es:[Di+2];2双端格式的范围位置 (LBA)，2~8÷2
 mov ECx,Es:[Di+10];双端格式的数据长度（范围大小）
 add ECx,2048-1;扇区大小
 shr ECx,11;÷2048，要读取的扇区数
+push eax
+push ecx
 
-mov EBx,文件名
-mov cr2,EBx;寄存器嘛。。越多越好
-mov bP,11;名长度
-call 检索
-jc 错误集群_没有文件
+mov si,文件名
+mov bP,10;名长度
+call iSO9660_检索
+jc 尝试另一种方式_1
+add sp,8;栈平
 mov Si,显示文件名
 call 打印
+jmp 找到文件_1
 
+尝试另一种方式_1:
+pop eax
+pop eax
+mov si,文件名_1
+mov bP,11;名长度
+call iSO9660_检索
+jc 错误集群_没有文件
+mov Si,显示文件名_1
+call 打印
 
+找到文件_1:
 mov EAx,Es:[Di+2];2双端格式的范围位置 (LBA)，2~8÷2
 mov ECx,Es:[Di+10];双端格式的数据长度（范围大小）
 add ECx,2048-1;扇区大小
@@ -185,60 +202,121 @@ mov dl,[驱动器号]
 jmp 50h:0
 
 
-
 ;EAX，BX，DX，SI，DI，BP，CR2，CR3寄存器将会被修改
 ;输入
 ;EAX >LBA
 ;ECX >扇区数
-;CR2 >名称长度
-;BP >文件名地址
+;SI >文件名地址
+;BP >名称长度
 ;输出
 ;无
 ;错误则设置进位
-检索:
- mov cr3,ECx;寄存器嘛。。越多越好
- ;mov EAXLBA号已存在
- mov Bx,Es;读到的位置
- push EAx
- call 读盘;只读一个扇区吗
- xor Di,Di
-
- call 检索文件名
- pop EAx;注意桟平衡
- jnc 找到并且返回;进位没有被设置说明我们
-
+iSO9660_检索:
+mov Bx,Es;读到的位置
+iSO9660_检索_e:
+ push ecx;不重复任何多余的指令
+ push eax
+ push si
+ call 读盘
+ pop si
+ pop eax
  inc EAx
- mov ECx,cr3;恢复
-loop 检索
-stc;设置错误进位
-找到并且返回:
-ret
 
+ mov di,es:[0];跳过一个.目录
+ add di,es:[di];跳过一个..目录
 
-检索文件名:
-cmp byte [类型],2;是什么类型的文件系统
-jz cd2j
-
-cd1下一个项:
-     mov Ax,Es:[Di];取这个项的长度
-     or Ax,Ax
+    iSO9660_继续此扇区:
+     mov dx,Es:[Di];取这个项的长度
+     cmp dx,0
      jz 触底
 
-     mov Cx,Bp;byte Es:[Di+32];取文件名长度
-     mov ESi,cr2;寄存器嘛。。越多越好
+     movzx cx,byte Es:[Di+32];取文件名长度，刚好满足repe指令
+     cmp cx,bp
+     jnz 不用对比
+     push si
      push Di;注意
      add Di,33;指向实际文件名
      repe cmpsb;比较SI，DI重复CX次数
      pop Di
-     jcxz 找到文件
+     pop si;续
+     jz 找到
 
-     add Di,Ax
-     cmp Di,2048
-jb cd1下一个项;小于则跳转
+     不用对比:
+     add di,dx
+     cmp di,2048
+    jb iSO9660_继续此扇区;小于则跳转
+
+pop ecx
+loop iSO9660_检索_e
+
 触底:
-stc
-找到文件:;底下的会借用这里的返回
+stc;设置错误进位
+找到:
+pop ECx;栈平
 ret
+
+
+
+是Joliet:;跟iSO9660几乎一样，不知道存在的目的是什么
+mov byte [类型],2;下次支持UDF
+mov si,Joliet
+call 打印
+
+mov EAx,Es:[156+2];根目录的目录项+2双端格式的范围位置 (LBA)，2~8÷2
+mov ECx,Es:[156+10];根目录的目录项+10双端格式的数据长度（范围大小）
+mov [rootLBA],eax;Loader需要的参数
+mov [根大小],ecx
+add ECx,2048-1;扇区大小
+shr ECx,11;÷2048，要读取的扇区数
+mov si,文件夹名_2;;;;;;;;;;;;;;;;;;;;;;
+mov bP,8;名长度
+call iSO9660_检索
+jc 错误集群_没有文件夹
+mov Si,显示文件夹名
+call 打印
+
+mov EAx,Es:[Di+2];2双端格式的范围位置 (LBA)，2~8÷2
+mov ECx,Es:[Di+10];双端格式的数据长度（范围大小）
+add ECx,2048-1;扇区大小
+shr ECx,11;÷2048，要读取的扇区数
+mov si,文件名_2;;;;;;;;;;;;;;;;;;;;;;;;;;
+mov bP,20;名长度
+call iSO9660_检索
+jc 错误集群_没有文件
+mov Si,显示文件名
+call 打印
+JMP 找到文件_1;通用于iSO9660
+
+
+
+
+
+
+
+
+是UDFS:
+mov byte [类型],3
+mov si,UDFS
+call 打印
+jmp $
+
+mov eax,256;锚卷描述符指针
+mov bx,es
+call 读盘
+mov EAx,Es:[16];止步于此
+mov ECx,Es:[16+4];我不知道任何的结构入大小端或LBA，偏移等
+add ECx,2048-1;应该是这样
+shr ECx,11
+
+
+
+
+
+
+
+
+
+
 
 
 cd2j:;;;;;;;;;;;;;;;;;;;;;这是我不理解的领域
@@ -251,7 +329,7 @@ mov ESi,cr2;寄存器嘛。。越多越好
 push di;注意桟平衡
 add di,8h
 repe cmpsb;比较SI，DI重复CX次数
-jcxz 找到文件
+jz 找到
 pop Di
 
 ;next_entry:
@@ -304,7 +382,7 @@ jmp short 停止前
 错误集群_没有文件夹:
 mov Si,换行没有
 call 打印
-mov Si,显示文件夹名
+mov Si,文件夹名
 jmp short 停止前
 
 错误集群_没有文件:
@@ -321,7 +399,7 @@ hlt
 jmp short 停止
 
 
-;EAX，DX，Si寄存器将会被修改
+;EAX，BX，DX，Si寄存器将会被修改
 ;输入
 ;EAX >LBA低32位
 ;BX >段地址
@@ -348,20 +426,28 @@ ret
 
 
 
+二卷 db 2,'CD001';看似第二张卷但不一定在第二槽位
+Joliet db '%/E',0;或@或C或E
 扩展描述符 db 'BEA01'
 扩展描述符结束 db 'TEA01'
-UDFS db 'NSR0'
-二卷 db 2h,'CD001';看似第二张卷但不一定在第二槽位
-Joliet db 25h,2fh,45h
-类型 db 1
-显示文件夹名 db 10,13
-文件夹名 db 'BOOT',0;0是结束符
+UDFS db 'NSR2',0;或NSR0或NSR2
+类型 db 0
+
+显示文件夹名 db 10,13,'/'
+文件夹名 db 'Boot',0
+显示文件夹名_1 db 10,13,'/'
+文件夹名_1 db 'BOOT',0;0是结束符
 
 显示文件名 db '/'
-文件名 db 'LOADER.BIN',0;所有的文件名都是都是大写
+文件名 db 'Loader.BIN',0
+显示文件名_1 db '/'
+文件名_1 db 'LOADER.BIN',0;所有的文件名都是都是大写
+
+文件夹名_2 db 0,'B',0,'o',0,'o',0,'t'
+文件名_2 db 0,'L',0,'o',0,'a',0,'d',0,'e',0,'r',0,'.',0,'B',0,'I',0,'N'
 
 没有 db '/none ',0
-换行没有 db 10,13,'nono',0
+换行没有 db 10,13,'none ',0
 
-;times 2048-($-$$) db 0;BIOS似乎不止加载一个扇区2048，到底加载了几个呢
-;dw 0aa55h
+times 2048-($-$$) db 0;BIOS似乎不止加载一个扇区2048，到底加载了几个呢
+dw 0aa55h
