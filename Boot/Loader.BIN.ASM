@@ -42,6 +42,10 @@ mov fs:[26],ax;24+2=26
 mov bx,int6-DOSstart
 mov fs:[24],bx;6×4=24
 
+mov fs:[50],ax
+mov bx,intC-DOSstart
+mov fs:[48],bx
+
 mov fs:[54],ax
 mov bx,intD-DOSstart
 mov fs:[52],bx
@@ -92,35 +96,48 @@ mov bx,1;获取文件系统参数
 int 21h
 pushad;push all压栈全部寄存器
 
+mov si,换行
+add si,bp
+call 打印
 mov ax,9000h
 mov es,ax
-mov word[第一个文件名+bp],Boot+3
-mov word[第二个文件名+bp],BOOT+3
-mov word[文件名长度+bp],4
+mov ax,BOOT;跳过一个13，跳过一个10，跳过一个/
+mov bx,4
+mov cx,BOOT
+mov dx,4
+mov si,1;文件夹
 call 获取文件项
+mov si,BOOT;用于显示
 jc 没有找到
 
 mov bx,5;设置文件系统参数
 int 21h
-sub si,3
-call 打印
-
-mov word[第一个文件名+bp],Command
-mov word[第二个文件名+bp],COMMAND
-mov word[文件名长度+bp],11
+mov bx,3;重置读取
+int 21h
+mov al,'/'
+mov ah,14
+mov bh,0;页码
+int 10h
+;jmp $
+mov ax,COMMAND
+mov bx,11
+mov cx,COMMAND
+mov dx,11
+mov si,0;文件
 call 获取文件项
+mov bx,3;重置读取
+int 21h
+mov si,COMMAND;用于显示
 jc 没有找到
 
 mov bx,5;设置文件系统参数
 int 21h
-call 打印
-
 
 popad;获取扇区大小
 pushad;续
 mov eax,8000_0000h
 
-没有找到_1:
+继续读入:
 push dx
 push eax
 mov bx,7
@@ -130,8 +147,7 @@ pop dx;扇区大小
 pushf;压标志位
 add ax,dx;推
 popf
-jnc 没有找到_1
-
+jnc 继续读入
 
 popad;传递参考数据
 push bx
@@ -141,60 +157,125 @@ pop bx
 jmp 8000h:0h;进入命令处理程序
 
 
+
+;输入
+;AX =第一个文件名
+;BX =第一个文件名长度
+;CX =第二个文件名
+;DX =第二个文件名长度
+;SI =文件属性
 获取文件项:
+push bp;保
+mov bp,sp
+mov esp,0;清空高位
+mov sp,bp;原
+pop bp
+push ax;+8
+push bx;+6
+push cx;+4
+push dx;+2
+push si;+0
+
+获取文件项_1:
+mov al,ss:[esp]
 mov bx,4;获取一个文件项
 int 21h
-jc 没有找到_2
-cmp dx,word[文件名长度+bp]
-jnz 获取文件项;没有找到
+jnc 还可以继续找
+add sp,10;删
+stc;进位
+ret
 
-mov si,[第一个文件名+bp]
-add si,bp
-mov [原CX值+bp],cx
-mov cx,[文件名长度+bp]
-push di;下一轮还需要
+还可以继续找:
+push eax;+10
+push ecx;+6
+push dx;+2，字符长度
+push di;+0
+mov ah,3;取光标位置
+mov bh,0;页码
+int 10h
+push dx;光标位置
+
+mov ax,9000h
+mov es,ax
+mov cx,ss:[esp+2+2];字符长度
+显示路径:
+ mov al,es:[di];取
+ inc di;推
+ mov ah,14
+ mov bh,0;页码
+ int 10h
+loop 显示路径
+mov di,[esp+2]
+mov cx,ss:[esp+2+2];字符长度
+转成大写_1:
+ mov al,es:[di];取
+ cmp al,'A'
+ jb 不要;小于则跳转
+ cmp al,'z'
+ ja 不要;大于则跳转
+ cmp al,'[';在大写和小写之间隔了几个字符，我们需要额外处理
+ jb 要;小于则跳转
+ cmp al,'a'
+ jb 不要;小于则跳转
+ 要 and byte es:[di],11011111b;转换为大写，原本就是则不变
+ 不要 inc di;推
+loop 转成大写_1
+
+mov di,[esp+2];字符起始
+mov cx,[esp+2+2];字符长度
+cmp cx,[esp+10+6+2+2]
+jnz 尝试第二项;没有找到
+mov si,[esp+10+8+2+2];第一个文件名
+add si,bp;加基地址
 repe cmpsb
-pop di
-mov si,[第一个文件名+bp]
 jz 找到了
 
+尝试第二项:
+cmp cx,[esp+10+2+2+2];字符长度
+jz 正确的;获取文件项;没有段文件名
+尝试继续:
+pop dx;重置光标
+mov ah,2
+mov bh,0;页码
+int 10h
+mov al,' ';用空格覆盖
+mov ah,10
+mov bh,0;页码
+mov cx,[esp+2+2];字符长度
+int 10h
+add sp,10+2;删
+jmp 获取文件项_1;继续
 
-cmp word[第二个文件名+bp],0
-jz 获取文件项;没有段文件名
-mov si,[第二个文件名+bp]
-add si,bp
-mov cx,[文件名长度+bp]
+正确的:
+mov si,[esp+10+4+2+2];第一个文件名
+add si,bp;加基地址
 repe cmpsb
-mov si,[第二个文件名+bp]
-jnz 获取文件项;没有找到
-没有找到_2:
+jnz 尝试继续
+
 找到了:
-mov cx,[原CX值+bp]
-pushf;不能破坏标志位
-add si,bp
-popf
+add sp,6;删
+pop ecx
+pop eax
+add sp,10;删
 ret
 
 
+
 没有找到:
-dec si;漏出我们的换行
-dec si
-call 打印
+push si;原字符
 mov si,None
+add si,bp
+call 打印
+pop si
+add si,bp
 call 打印
 jmp $
 
-第一个文件名 dw 0
-第二个文件名 dw 0
-原CX值 dw 0
-文件名长度 dw 0
 
-Boot db 13,10,'/Boot/',0
-BOOT db 13,10,'/BOOT/',0
-Command db 'Command.BIN',0
+换行 db 13,10,0
+BOOT db 'BOOT',0
 COMMAND db 'COMMAND.BIN',0
-;OCommand db 0,'C',0,'o',0,'m',0,'m',0,'a',0,'n',0,'d',0,'.',0,'B',0,'I',0,'N'
-None db 'None',0
+None db 'None ',0
 
 
 Joliet:
@@ -269,9 +350,12 @@ ud2
 
 无法确定文件系统类型:
 CALL 显示寄存器
+mov si,未知文件系统
+add si,bp
+call 打印
 jmp $
 jmp 8000h:0h;进入命令处理程序
-
+未知文件系统 db '?File sys?'
 
 
 
@@ -366,7 +450,7 @@ dw FAT32_1-DOSstart
 
 
 ;输入
-;无
+;AL =类型
 ;输出
 ;EAX >LBA
 ;ECX >扇区数据长度
@@ -377,7 +461,17 @@ push si
 push bx
 cmp byte[重置读取-DOSstart],0;标志
 jz 不要重置
-mov byte[重置读取-DOSstart],0;设置为0下次就不会重新读文件扇区了
+
+mov [文件属性-DOSstart],al;先标记为所有文件
+cmp al,0FFh
+jz 类型判断结束
+cmp al,2
+ja Er返回;大于则跳转
+mov [文件属性-DOSstart],al;标记文件
+cmp al,0
+jz 类型判断结束
+mov byte[文件属性-DOSstart],2;错误的文件夹标记
+类型判断结束 mov byte[重置读取-DOSstart],0;设置为0下次就不会重新读文件扇区了
 mov eax,[当前目录簇号-DOSstart]
 mov [LBA-DOSstart],eax
 
@@ -402,6 +496,7 @@ jb 取一个项;小于则跳转
 cmp word[循环次数-DOSstart],0
 jnz 还没读完
 mov byte[重置读取-DOSstart],1;下次则从头开始
+Er返回:
 stc;设置进位
 pop bx
 pop si
@@ -425,10 +520,16 @@ cmp word [di],0;这个项的长度为0则
 jz 读下一个扇区;触底
 mov si,[di];取这个项的长度
 add [当前扇区偏移量-DOSstart],si;预先推进到下一个项
-mov eax,[di+2];2双端格式的范围位置 (LBA)，2~8÷2
-mov ecx,[di+10];双端格式的数据长度（范围大小）
 add di,33;指向文件名长度
+mov al,[文件属性-DOSstart]
+cmp al,0FFh
+jz 要所有的
+cmp al,[di+25-33]
+jnz 不要重置;不符合类型
+要所有的 mov eax,[di+2-33];2双端格式的范围位置 (LBA)，2~8÷2
+mov ecx,[di+10-33];双端格式的数据长度（范围大小）
 movzx dx,byte [di-1];取文件名长度
+
 clc;清除进位
 pop bx
 pop si
@@ -438,15 +539,28 @@ jmp 返回
 
 
 ;输入
-;无
+;AL =类型
 ;输出
-;CX >文件名长度
 ;EAX >LBA
-;DS：SI >文件名位置
+;DX >文件名长度
+;DS：DI >文件名位置
 FAT32_1:
+push bx
+push cx
+push si
 cmp byte[重置读取-DOSstart],0;标志
 jz 不要重置_2
-mov byte[重置读取-DOSstart],0;设置为0下次就不会重新读文件扇区了
+
+mov [文件属性-DOSstart],al;先标记为所有文件
+cmp al,0FFh
+jz 类型判断结束_1
+cmp al,2
+ja Er返回_1;大于则跳转
+mov byte[文件属性-DOSstart],0;标记文件
+cmp al,0
+jz 类型判断结束_1
+mov byte[文件属性-DOSstart],2;错误的文件夹标记
+类型判断结束_1 mov byte[重置读取-DOSstart],0;设置为0下次就不会重新读文件扇区了
 mov eax,[当前目录簇号-DOSstart]
 mov [当前簇号-DOSstart],eax
 call 簇转LBA
@@ -474,55 +588,12 @@ call 推到下一个项
 mov si,bx
 cmp byte[bx],0e5h;删除的标志
 jz 本项已被删除
-cmp byte[bx+11],20h
-jz 短目录项
 cmp byte[bx+11],0Fh;长目录的项固定值
-jnz 本项已被删除;不是长目录项
+jz 长目录项
+cmp byte[bx+11],20h
+jnz 本项已被删除
 
-;是长目录项
-mov di,DOSEnd-DOSstart+2048+2+26;字符缓存区，+2不覆盖结束符，+26以应对鬼畜的字符存储方式
-mov [待转换字符-DOSstart],di
-cmp byte[bx],41h;1∨40h=41h
-jz 单条长项
-
-
-
-;是多条长项:;;;;1;;;;
-mov al,[bx];第一个是特殊的项
-cmp al,40h
-jb 不能⊕;小于则跳转
-xor al,40h;固定异或值
-不能⊕ mov [项循环次数-DOSstart],al;项序号，减计数
-mov si,bx
-inc si;跳过项的序号
-mov [待转换字符-DOSstart],di
-call 取项内字符;第一次有字符结束所以忽略进位
-mov ax,0;结束符
-stosw;存
-
-继续取项内字符:;;;;2;;;;，内循环
-call 推到下一个项
-cmp byte[bx],0e5h
-jz 本项已被删除
-dec byte[项循环次数-DOSstart];项序号
-jz 本项已被删除
-mov al,[项循环次数-DOSstart]
-cmp [bx],al
-jnz 本项已被删除;此项正常
-
-mov si,bx
-inc si;跳过项的序号
-add word[待转换字符-DOSstart],26;应对这鬼畜的字符存储方式，不会出现没填满26个坑的情况
-mov di,[待转换字符-DOSstart];缓存区
-call 取项内字符
-jc 本项已被删除;没填满
-cmp byte[项循环次数-DOSstart],1;项序号
-jnz 继续取项内字符;已经结束嘞
-jmp 项结束
-
-
-短目录项:
-;jmp $
+;短目录项:
 mov si,bx;文件名
 push bp
 mov bp,si
@@ -592,7 +663,6 @@ loop 转成小写
 处理结束_1:
 ret
 
-;;;;;;;;;;;;;;;;;;;;;;;;;
 分隔点.:
 mov si,bp;指向扩展名
 mov cx,dx;扩展名长度
@@ -605,7 +675,6 @@ ret
 inc sp;栈平衡
 inc sp
 
-
 扩展名结束:
 pop bp
 call 推到下一个项
@@ -617,17 +686,64 @@ pop eax
 mov dx,di
 sub dx,DOSEnd-DOSstart+2048;文件名缓存区，DX =文件名长度
 mov di,DOSEnd-DOSstart+2048;DI =文件名位置
+Er返回_1:
+pop si
+pop cx
+pop bx
 jmp 返回;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
-单条长项:
+
+长目录项:
+mov di,DOSEnd-DOSstart+2048+2+26;字符缓存区，+2不覆盖结束符，+26以应对鬼畜的字符存储方式
+mov [待转换字符-DOSstart],di
+cmp byte[bx],41h;1∨40h=41h
+jnz 多条长项
 inc si;跳过项的序号
 call 取项内字符
 mov ax,0;结束符
 stosw;存
+jmp 项结束
+
+
+多条长项:;;;;1;;;;
+mov al,[bx];第一个是特殊的项
+cmp al,40h
+jb 不能⊕;小于则跳转
+xor al,40h;固定异或值
+不能⊕ mov [项循环次数-DOSstart],al;项序号，减计数
+mov si,bx
+inc si;跳过项的序号
+mov [待转换字符-DOSstart],di
+call 取项内字符;第一次有字符结束所以忽略进位
+mov ax,0;结束符
+stosw;存
+
+继续取项内字符:;;;;2;;;;，内循环
+call 推到下一个项
+cmp byte[bx],0e5h
+jz 本项已被删除
+dec byte[项循环次数-DOSstart];项序号
+jz 本项已被删除
+mov al,[项循环次数-DOSstart]
+cmp [bx],al
+jnz 本项已被删除;此项正常
+
+mov si,bx
+inc si;跳过项的序号
+add word[待转换字符-DOSstart],26;应对这鬼畜的字符存储方式，不会出现没填满26个坑的情况
+mov di,[待转换字符-DOSstart];缓存区
+call 取项内字符
+jc 本项已被删除;没填满
+cmp byte[项循环次数-DOSstart],1;项序号
+jnz 继续取项内字符;已经结束嘞
+
 
 项结束:;;;;;;;;注意，没有校验
 call 推到下一个项
+
+;cmp al,0FFh
+;jz 要所有的
 push word[bx+20];获取簇号高位
 push word[bx+26];获取簇号低位
 
@@ -661,6 +777,9 @@ mov dx,di;字符结束
 mov di,[待转换字符-DOSstart];字符起始
 sub dx,di;字符结束-字符起始=字符长度
 pop eax;转换为32位簇号
+pop si
+pop cx
+pop bx
 jmp 返回;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
@@ -682,6 +801,9 @@ jnc 没有结束
 inc sp;jmp指令返回时的栈平衡
 inc sp
 mov byte[重置读取-DOSstart],1;下次则从头开始
+pop si
+pop cx
+pop bx
 jmp 返回
 
 没有结束:
@@ -752,7 +874,7 @@ LBA dd 0
 项循环次数 db 0
 当前扇区偏移量 dw 0
 待转换字符 dw 0
-
+文件属性 db 0
 
 
 ;将会修改EAX,EDX寄存器
@@ -1044,9 +1166,9 @@ ret
 ;EAX，EBX寄存器将会被修改
 ;输入
 ;EBX =待转换数值
-;DS：DI =缓存区
+;ES：DI =缓存区
 ;输出
-;DS：DI =16进制ascall码，结尾为0，注意倒序应使用std指令
+;ES：DI =16进制ascall码，结尾为0，注意倒序应使用std指令
 二进制转十六进制ascall码:
  mov al,bl
  shr ebx,4;显示了一位
@@ -1191,7 +1313,7 @@ retf;iret是int指令专用返回
 
 
 继续打印:;每个指令都很重要确保他们被正确执行
- xor bx,bx
+ mov bh,0;页码
  mov ah,14;BIOS中断参数
  int 10h;显示字符
 
@@ -1249,7 +1371,7 @@ iret
 
 
 
-int6:;遇到错误指令或使用ud2指令可手动触发
+int6:;遇到错误指令或使用ud2指令触发
 mov ebx,9000h;顺便清空高位
 mov ds,bx
 mov es,bx
@@ -1297,12 +1419,51 @@ hlt
 jmp short 停
 
 
-_cs_ip db '=PI+61*SC',10,13
-错误的操作码 db 13,'Wrong opcode _',0
+_cs_ip db '=Pi+61*SC',10,13
+错误的操作码 db 13,'Wrong opcode_',0
 
 
 
+intC:;#SS，栈溢出
+mov ebx,9000h;顺便清空高位
+mov ds,bx
+mov es,bx
 
+mov si,栈错误-DOSstart
+call 打印
+
+mov di,DOSEnd-DOSstart+2048;在此处放置转换的ascall码
+mov al,0;结束符
+stosb
+
+mov bx,ss
+shl ebx,4;×16
+add ebx,esp
+add ebx,3;减int指令压的3个值
+call 二进制转十六进制ascall码
+mov si,_ss-DOSstart
+mov cx,7
+rep movsb
+
+mov ebx,esp
+add ebx,3;减int指令压的3个值
+call 二进制转十六进制ascall码
+mov si,_esp-DOSstart
+mov cx,6
+rep movsb
+mov si,di
+dec si;减一以免取到下一个字符
+std
+call 打印
+cld;恢复正序
+停_1:
+cli
+hlt
+jmp short 停_1
+
+栈错误 db 13,10,'Stack fault',0
+_ss db '=61*SS+'
+_esp db '=PSE',13,10
 
 
 intD:;下次支持其他段寄存器
