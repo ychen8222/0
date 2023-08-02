@@ -14,10 +14,11 @@
 @cya
 
 ;8月2日
-;优化了运行速度，显示文件项的名字
+;优化了运行速度，显示文件项的名字\
+@cya
 ;----------------------------------------------------------------------------
 org 7c00h;历史遗留的起始位置
-;bpb表不用修改，他只是用来占位而已
+;BPB表不用修改，他只是用来占位而已
 ;12~?字节为BPB部分？
 jmp short 初始化寄存器;略过下面的干扰去执行引导程序,3个字节
 nop;别漏了这个
@@ -56,7 +57,7 @@ FAT表起始 dd 0
 初始化寄存器:;添加更多寄存器组合方式的注释
 xor ax,ax
 mov ds,ax;数据段DS：BX，Si，Di
-mov ss,ax;堆栈段SS：SP，BP
+;mov ss,ax;堆栈段SS：SP，BP
 mov ax,1000h;第2段
 mov es,ax;附加段ES：Di
 mov sp,7c00h;临时栈
@@ -74,11 +75,11 @@ call 显示
 ;al×bl =ax，被乘数×被乘数 =积
 ;eax×ebx =edx高：低eax
 xor eax,eax
-mov [未使用12字节],eax;初始化对比缓冲区状态
+mov dword ds:[未使用12字节],eax;清空用于对比的LBA号
 
 mov ax,word ds:[保留扇区数];没有 movzx eax，字...需要
 add eax,dword ds:[FAT区前隐藏扇区数]
-mov dword ds:[FAT表起始],eax;第一个fat表扇区
+mov dword ds:[FAT表起始],eax;第一个FAT表扇区
 mov dword ds:[数据区起始],eax;数据区起始，仅值的第一部分
 
 ;然后计算数据区起始
@@ -96,7 +97,7 @@ mov eax,dword ds:[根目录起始簇号]
 cld;清空df并向前推进
 xor bp,bp
 movzx cx,byte ds:[每个簇占用的扇区数]
-算簇大小 add bp,[扇区大小]
+算簇大小 add bp,word ds:[扇区大小]
 loop 算簇大小
 
 下一个簇:
@@ -110,13 +111,16 @@ loop 算簇大小
  xor bh,bh;页码
 
     下一个目录项:;在这里循环的寻找目标文件
+     cmp byte es:[di],0e5h;固定值
+     jz 直接下一个项;本项已被删除
      cmp byte es:[di+11],20h;固定值
-     jnz 不是段目录项
+     jnz 直接下一个项;不是短目录项
      mov al,13;回车符，用于重置光标
-     mov cx,12;显示长度
+     mov cx,12;显示长度11+一个回车符
      mov dx,di;save
+
         显示文件名 int 10h
-         mov al,es:[di]
+         mov al,byte es:[di]
          inc di;推
         loop 显示文件名;续
 
@@ -126,7 +130,8 @@ loop 算簇大小
      repe cmpsb;比较Si，Di，重复CX次数
      mov di,dx;恢复推动过的Di
      jz 找到了文件
-     不是段目录项:
+
+     直接下一个项:
      ;and di,0FFe0h;（1111 1111 1110 0000）用于使Di对齐
      add di,32;20h，DI指向下一个文件条目的32字节结构体开头处
      cmp di,bp;这个扇区查完了吗？
@@ -140,12 +145,11 @@ jmp short 下一个簇
 找到了文件:
 push word es:[di+20];获取簇号高位
 push word es:[di+26];获取簇号低位
-pop eax;转换为32位
+pop eax;合成为32位
 shr bp,4;÷16，转成段地址
-mov di,1000h;读入第2个段
+mov di,es;读入第2个段
 
 读入文件:
- push eax
  call 簇转LBA;Edx 是簇中的扇区，EAX 是扇区
  jc 读入完成
  mov bx,di
@@ -159,20 +163,15 @@ mov si,换行
 call 显示
 mov bp,0AA55h;判断数，用于表示我们的引导扇区
 mov dh,2;文件系统编号
-mov dl,[驱动器号]
+mov dl,byte ds:[驱动器号]
 jmp 1000h:0;我的同行抖机灵只读一个簇就跳转过去了，让他解析表项自己读完自己，这样好吗？这样不好
 
 
 簇找完了:
-mov si,换行
+mov si,回车
 mov dx,没有文件
 call 更多显示
-
-停止:
 int 18h;返回BiOS
-停 cli
-hlt
-jmp short 停
 
 
 
@@ -208,7 +207,7 @@ ret
 
 
 ;给定一个簇号，找出下一个簇号
-;簇号÷（扇区大小×4） =商×4，扇区号…余数，目录内偏移
+;簇号÷（扇区大小×4） =商×4 =扇区号…余数，簇表内偏移
 ;输入
 ;EAX >簇号
 ;输出
@@ -222,7 +221,7 @@ shr bx,2;扇区512字节除以四便是每个扇区可保存的目录数
 xor edx,edx;清空高位
 div ebx;EAX >扇区号，DX >目录内偏移
 shl dx,2
-mov cx,dx;save
+mov di,dx;save，Si会被读盘修改
 
 add eax,dword ds:[FAT表起始];你得到了LBA号
 cmp eax,dword ds:[未使用12字节];在同一张FAT表内？
@@ -234,9 +233,9 @@ call 读盘;只需要读一个扇区的FAT表即可
 
 读取簇号:
 shl bx,4;×16，变回偏移，基地址
-add bx,cx;加上FAT表内偏移
-and byte ds:[bx+3],0Fh;屏蔽前4位，FAT32其实只有28位簇号
-mov eax,dword ds:[bx];读取我们需要的簇号
+;+Di=加FAT表内偏移
+and byte ds:[bx+di+3],0Fh;屏蔽前4位，FAT32其实只有28位簇号
+mov eax,dword ds:[bx+di];读取我们需要的簇号
 ret
 
 
@@ -259,7 +258,7 @@ lodsb
 
  显示:
  lodsb;将ds：si指向的内容放入al然后si+1
- or al,al;判断[al]中的字符值是否 =0
+ or al,al;判断al中的字符值是否 =0
 jnz 继续显示
 ret
 
@@ -272,14 +271,15 @@ ret
 ;BX >段地址
 ;输出
 ;BX：0 >目标位置
-读盘:;读硬盘调用+增加dpa包 是加扇区
-push dword 0;[12]LBA高32位
+读盘:;读硬盘调用+增加DPA包 是加扇区
+push ds;push dword 0;[12]LBA高32位，这只是压个固定为0的寄存器，比压dword 0节省空间
+push ds;压够dword，压两次也比直接压dword 0节省空间
 push eax;[8]LBA低32位
 push bx;[6]段地址
-push 0;[4]偏移地址
-;byte[3]保留，必须为0，注意堆栈只能压word
+push ds;push 0;[4]偏移地址，这只是压个固定为0的寄存器，比压word 0节省空间
+;byte[3]保留，必须为0，注意堆栈最小压word
 push dx;byte 1;[2]要传输的块数0~127
-;byte[1]保留，必须为0，CX的高位就是这里的值应当清空CH寄存器，堆栈只能压word
+;byte[1]保留，必须为0，DX的高位就是这里的值应当清空DH寄存器，注意堆栈最小压word
 push byte 16;[0]参数块大小，高位为0正好用于保留处
 
 mov si,sp;注意堆栈是反过来的
@@ -294,14 +294,18 @@ ret
 mov si,换行
 mov dx,读盘错误_1
 call 更多显示
-jmp 停止
+
+停 cli
+hlt
+jmp short 停
 
 
 
 读盘错误_1 db 'Disk Erro',0
-没有文件 db 'None ';没有找到loader，144是判断数
+没有文件 db 'None ';没有找到loader，0是判断数
 要搜索的文件名 db 'LOADER  BIN',0;在FAT文件系统 里所有保存的文件名都是大写空格是后缀名的点，11字节
-换行 db 10,13,0
+换行 db 10
+回车 db 13,0
 
 times 510-($-$$) db 0
 dw 0xAA55
