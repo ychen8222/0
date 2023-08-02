@@ -58,18 +58,18 @@ mov fs:[84h],bx
 mov es:[驱动器号-DOSstart],dl;保存驱动器号
 cmp bp,0AA55h;由我们的引导扇区过传来的判断数
 jnz 无法确定文件系统类型
-cmp dh,2
-ja 无法确定文件系统类型;大于则跳转
 
 mov al,dh;修改文件系统编号
 mov bx,2
 int 21h
+jc 无法确定文件系统类型
 movzx bx,dh;由我们的引导扇区过传来的文件系统编号
 shl bx,1;×2
-add bx,文件系统
+mov bp,sp
+movzx esp,bp;清空高位
 pop bp;弹基地址
 add bx,bp;加基地址
-mov bx,[bx];取值
+mov bx,[bx+文件系统];取值
 add bx,bp;加基地址
 jmp bx;跳转
 
@@ -90,24 +90,25 @@ mov es:[当前目录簇号-DOSstart],eax
 mov eax,fs:[7c00h+3+4]
 mov es:[iSO9660目录长度-DOSstart],eax
 
-
-movzx di,dl;驱动器号
 mov bx,1;获取文件系统参数
 int 21h
-pushad;push all压栈全部寄存器
+push bx
+push di
+push ecx;+6
+push eax;+2
+push dx;+0！
 
 mov si,换行
 add si,bp
 call 打印
 mov ax,9000h
 mov es,ax
-mov ax,BOOT;跳过一个13，跳过一个10，跳过一个/
+mov ax,BOOT
 mov bx,4
 mov cx,BOOT
 mov dx,4
 mov si,1;文件夹
 call 获取文件项
-mov si,BOOT;用于显示
 jc 没有找到
 
 mov bx,5;设置文件系统参数
@@ -118,69 +119,60 @@ mov al,'/'
 mov ah,14
 mov bh,0;页码
 int 10h
-;jmp $
+
 mov ax,COMMAND
 mov bx,11
 mov cx,COMMAND
 mov dx,11
 mov si,0;文件
 call 获取文件项
-mov bx,3;重置读取
-int 21h
-mov si,COMMAND;用于显示
 jc 没有找到
 
 mov bx,5;设置文件系统参数
 int 21h
 
-popad;获取扇区大小
-pushad;续
-mov eax,8000_0000h
+mov ecx,8000_0000h
+sub cx,[esp];减应对推
 
 继续读入:
-push dx
-push eax
+add cx,[esp];推
 mov bx,7
 int 21h
-pop eax
-pop dx;扇区大小
-pushf;压标志位
-add ax,dx;推
-popf
 jnc 继续读入
 
-popad;传递参考数据
-push bx
+pop dx
+pop eax
+pop ecx
+pop di
 mov bx,5;设置为根
 int 21h
-pop bx
+pop bx;后弹出，这样就不会被调用功能号修改了
 jmp 8000h:0h;进入命令处理程序
 
 
 
 ;输入
-;AX =第一个文件名
+;AX =第一个文件名位置
 ;BX =第一个文件名长度
-;CX =第二个文件名
+;CX =第二个文件名位置
 ;DX =第二个文件名长度
 ;SI =文件属性
+;输出
+;EAX =LBA号
+;ECX =数据长度
 获取文件项:
-push bp;保
-mov bp,sp
-mov esp,0;清空高位
-mov sp,bp;原
-pop bp
 push ax;+8
 push bx;+6
 push cx;+4
 push dx;+2
-push si;+0
+push si;+0！
 
 获取文件项_1:
 mov al,ss:[esp]
 mov bx,4;获取一个文件项
 int 21h
 jnc 还可以继续找
+mov si,[esp+8];用于显示
 add sp,10;删
 stc;进位
 ret
@@ -189,7 +181,7 @@ ret
 push eax;+10
 push ecx;+6
 push dx;+2，字符长度
-push di;+0
+push di;+0！
 mov ah,3;取光标位置
 mov bh,0;页码
 int 10h
@@ -198,29 +190,10 @@ push dx;光标位置
 mov ax,9000h
 mov es,ax
 mov cx,ss:[esp+2+2];字符长度
-显示路径:
- mov al,es:[di];取
- inc di;推
- mov ah,14
- mov bh,0;页码
- int 10h
-loop 显示路径
+call 显示路径
 mov di,[esp+2]
 mov cx,ss:[esp+2+2];字符长度
-转成大写_1:
- mov al,es:[di];取
- cmp al,'A'
- jb 不要;小于则跳转
- cmp al,'z'
- ja 不要;大于则跳转
- cmp al,'[';在大写和小写之间隔了几个字符，我们需要额外处理
- jb 要;小于则跳转
- cmp al,'a'
- jb 不要;小于则跳转
- 要 and byte es:[di],11011111b;转换为大写，原本就是则不变
- 不要 inc di;推
-loop 转成大写_1
-
+call 转成大写_1
 mov di,[esp+2];字符起始
 mov cx,[esp+2+2];字符长度
 cmp cx,[esp+10+6+2+2]
@@ -235,14 +208,8 @@ cmp cx,[esp+10+2+2+2];字符长度
 jz 正确的;获取文件项;没有段文件名
 尝试继续:
 pop dx;重置光标
-mov ah,2
-mov bh,0;页码
-int 10h
-mov al,' ';用空格覆盖
-mov ah,10
-mov bh,0;页码
 mov cx,[esp+2+2];字符长度
-int 10h
+call 重置光标并清除前文件名
 add sp,10+2;删
 jmp 获取文件项_1;继续
 
@@ -269,13 +236,19 @@ call 打印
 pop si
 add si,bp
 call 打印
-jmp $
+mov si,换行
+add si,bp
+call 打印
+int 18H;返回BIOS
+jmp 停
+
 
 
 换行 db 13,10,0
-BOOT db 'BOOT',0
-COMMAND db 'COMMAND.BIN',0
 None db 'None ',0
+BOOT db 'BOOT',0
+COMMAND db 'COMMAND.BIN',13,10,0
+
 
 
 Joliet:
@@ -302,57 +275,169 @@ mov eax,fs:[7c00h+52+8];1fe838，第一个数据扇区，全部值
 mov es:[FAT数据区起始-DOSstart],eax
 
 
+mov si,换行
+add si,bp
+call 打印
+
+mov bx,1;获取文件系统参数
+int 21h
+push eax;+6，簇号
+push bx;+4
+push di;+2
+push dx;+0！，扇区大小
+
+mov ax,BOOT
+mov bx,4;长
+mov cx,1;文件夹
+call 获取文件项_2
+jc 没有找到
+mov bx,5;设置文件系统参数
+int 21h
+mov al,'/'
+mov ah,14
+mov bh,0;页码
+int 10h
+
+mov ax,COMMAND
+mov bx,11;长
+mov cx,0;文件
+call 获取文件项_2
+jc 没有找到
+mov bx,5;设置文件系统参数
+int 21h
+
+mov ecx,8000_0000h;读入文件扇区不会修改ebx
+sub cx,[esp];减应对推
+
+继续读入_1:
+add cx,[esp];推
+mov bx,7
+int 21h
+jnc 继续读入_1
+mov eax,[esp+6]
+mov bx,5;恢复原根目录
+int 21h
+pop dx;传递参考数据
+pop di
+pop bx
+pop eax
+jmp 8000h:0h;进入命令处理程序
 
 
 
-aaaa:
+
+
+;输入
+;AX =文件名位置
+;BX =文件名长度
+;CX =属性
+;输出
+;EAX =簇号
+获取文件项_2:
+add ax,bp;加基地址
+push ax;+6，文件名位置
+push bx;+4，文件名长度
+mov bl,cl;save
+mov ah,3;取光标位置
+mov bh,0;页码
+int 10h
+push dx;+2，光标位置
+push word 0;+0！，上一串字符长度
+mov al,bl;要获取项的属性
+
+获取文件项_3:
 mov bx,4;获取一个文件项
 int 21h
-jc $
-mov si,di
+jnc 还可以继续找_1
+mov dx,[esp+2];重置光标
+mov cx,[esp];上一串字符长度
+call 重置光标并清除前文件名
+mov si,[esp+6];用于显示
+add sp,8;删
+stc;进位
+ret
+
+还可以继续找_1:
+push dx;+2，save
+push ax;0！
+mov dx,[esp+4+2];重置光标
+mov cx,[esp+4];上一串字符长度
+call 重置光标并清除前文件名
 mov ax,9000h
-mov ds,ax
+mov es,ax;在DOS内
+mov cx,[esp+2];要显示的字符串长度
+push di
+call 显示路径
+pop di
+pop ax
+pop cx;字符长度
+
+mov [esp],cx;刷，这一串字符长度
+cmp cx,[esp+4];文件名长度
+jnz 获取文件项_3;继续
+push ax
+push di
+call 转成大写_1
+pop di
+pop ax
+mov si,[esp+6];文件名位置
+mov cx,[esp];这一串，文件名长度
+repe cmpsb
+jnz 获取文件项_3;继续
+add sp,8;删
+ret
 
 
-mov al,10
- xor bx,bx
- mov ah,14;BIOS中断参数
- int 10h;显示字符
-mov al,13
- int 10h;显示字符
-mov cx,dx
-mmu lodsb
+;输入
+;DX =光标位置
+;CX =覆盖长度
+;输出
+重置光标并清除前文件名:
+mov ah,2;功能号
+mov bh,0;页码
+int 10h
+mov al,' ';用空格覆盖
+mov ah,10
+int 10h
+ret
 
 
- xor bx,bx
- mov ah,14;BIOS中断参数
- int 10h;显示字符
-loop mmu
-;jmp $
-
-jnc aaaa
-
-
-
-jmp $
-ud2
-
-
-
-
-
-
-
-
+;输入
+;CX =字符长度
+;Di =字符位置
+;输出
+转成大写_1:
+ mov al,es:[di];取
+ cmp al,'A'
+ jb 不要;小于则跳转
+ cmp al,'z'
+ ja 不要;大于则跳转
+ cmp al,'[';在大写和小写之间隔了几个字符，我们需要额外处理
+ jb 要;小于则跳转
+ cmp al,'a'
+ jb 不要;小于则跳转
+ 要 and byte es:[di],11011111b;转换为大写，原本就是则不变
+ 不要 inc di;推
+loop 转成大写_1
+ret
 
 
+
+显示路径:
+ mov al,es:[di];取
+ inc di;推
+ mov ah,14
+ mov bh,0;页码
+ int 10h
+loop 显示路径
+ret
 
 
 无法确定文件系统类型:
-CALL 显示寄存器
 mov si,未知文件系统
-add si,bp
+;add si,bp
 call 打印
+CALL 显示寄存器
 jmp $
 jmp 8000h:0h;进入命令处理程序
 未知文件系统 db '?File sys?'
@@ -373,28 +458,58 @@ mov cs:[0FFFdh],ss
 mov cs:[0FFFbh],sp;保存原栈
 mov sp,9000h
 mov ss,sp
-mov esp,0FFFbh
+mov esp,0FFFbh;顺便清空高位
 push ds
+cmp bx,9;最大支持几个功能-1
+ja 带进位返回;大于则跳转
+push si
+mov si,9000h
+mov ds,si;段地址，int13ah42的DS：SI，磁盘参数块需要
 
 shl bx,1;×2
-cmp bx,4*2
-stc;设置进位
-ja 返回;大于则跳转
-add bx,功能-DOSstart
-mov bx,cs:[bx]
-jmp bx
+mov bx,[bx+功能-DOSstart]
+cmp bx,寻址表结束-DOSstart;地址已经不在表内所以不需要再次定位
+JAE 不分文件系统;大于等于则跳转
+movzx si,byte[文件系统编号-DOSstart];使用DS段寄存器
+shl si,1;×2
+mov bx,[bx+si];BX是基地址，Si是表内偏移
+
+不分文件系统:
+pop si;原
+jmp bx;跳CS：BX
+
+带进位返回 stc
+
+返回:
+pop ds
+pop sp
+mov ss,cs:[0FFFdh];还原栈
+retf;iret是int指令专用返回
+
 
 功能:
 dw 0;null，错误处理
 dw 获取文件系统信息-DOSstart;1
 dw 修改文件系统编号-DOSstart;2
-
 dw 设置重新读取文件扇区-DOSstart;3
 dw 获取一个文件项-DOSstart;4
 dw 设置文件系统参数-DOSstart;5
-
 dw 重置文件读入状态-DOSstart;6
 dw 读入文件扇区-DOSstart;7
+dw 解析MasterBootRecord-DOSstart;8
+
+获取一个文件项:
+dw 0;null，错误处理
+dw iSO9660_1-DOSstart
+dw FAT32_1-DOSstart
+
+读入文件扇区:
+dw 0;null，错误处理
+dw iSO9660_3-DOSstart
+dw FAT32_3-DOSstart
+
+寻址表结束:;结束位置跟下面一项的地址重复了，所以需要大于等于跳转
+
 
 
 ;----------------------------------------------------------------------------
@@ -402,17 +517,23 @@ dw 读入文件扇区-DOSstart;7
 ;无
 ;输出
 ;BX >文件系统编号
-获取文件系统信息:
-mov eax,cs:[当前目录簇号-DOSstart]
-movzx bx,cs:[文件系统编号-DOSstart]
-mov ecx,cs:[iSO9660目录长度-DOSstart]
-mov dx,cs:[扇区大小-DOSstart]
+获取文件系统信息:;获取文件系统参数
+mov eax,[当前目录簇号-DOSstart]
+movzx bx,[文件系统编号-DOSstart]
+cmp byte[文件系统编号-DOSstart],1
+jnz 不是iSO9660
+mov ecx,[iSO9660目录长度-DOSstart]
+不是iSO9660 mov dx,[扇区大小-DOSstart]
+mov di,[驱动器号-DOSstart];仅低位有效
 jmp 返回
 
 ;输入
 ;AL >文件系统编号
 修改文件系统编号:
-mov cs:[文件系统编号-DOSstart],al
+cmp al,2
+ja 带进位返回;大于则跳转
+mov [文件系统编号-DOSstart],al
+clc;清除进位
 jmp 返回
 
 文件系统编号 db 0
@@ -422,32 +543,16 @@ jmp 返回
 ;输入
 ;无
 设置重新读取文件扇区:
-mov byte cs:[重置读取-DOSstart],1
+mov byte[重置读取-DOSstart],1
 jmp 返回
 
+
+
 ;输入
-;无
+;AL =需要输入一次文件类型
 ;输出
-; >文件参数
-获取一个文件项:
-movzx bx,cs:[文件系统编号-DOSstart]
-shl bx,1;×2
-add bx,文件系统_1-DOSstart
-cmp bx,3*2
-stc;设置进位
-ja 返回;大于则跳转
-mov si,9000h
-mov ds,si;段地址，int13ah42的DS：SI，磁盘参数块需要
-mov bx,[bx]
-jmp bx
-
-文件系统_1:
-dw 0;null，错误处理
-dw iSO9660_1-DOSstart
-dw FAT32_1-DOSstart
-;dw -DOSstart
-
-
+; =文件参数
+;获取一个文件项:
 
 ;输入
 ;AL =类型
@@ -459,18 +564,22 @@ dw FAT32_1-DOSstart
 iSO9660_1:
 push si
 push bx
+mov bx,9000h
+mov ds,bx;段地址，int13ah42的DS：SI，磁盘参数块需要
 cmp byte[重置读取-DOSstart],0;标志
 jz 不要重置
 
-mov [文件属性-DOSstart],al;先标记为所有文件
-cmp al,0FFh
-jz 类型判断结束
-cmp al,2
-ja Er返回;大于则跳转
-mov [文件属性-DOSstart],al;标记文件
+mov [文件属性-DOSstart],al;标记为文件
 cmp al,0
 jz 类型判断结束
 mov byte[文件属性-DOSstart],2;错误的文件夹标记
+cmp al,1
+jz 类型判断结束
+mov [文件属性-DOSstart],al;标记为所有
+cmp al,0FFh
+jz 类型判断结束
+jmp Er返回
+
 类型判断结束 mov byte[重置读取-DOSstart],0;设置为0下次就不会重新读文件扇区了
 mov eax,[当前目录簇号-DOSstart]
 mov [LBA-DOSstart],eax
@@ -478,7 +587,7 @@ mov [LBA-DOSstart],eax
 mov eax,[iSO9660目录长度-DOSstart]
 mov edx,0;清空除法高位
 movzx ebx,word [扇区大小-DOSstart]
-div ebx;edx高：eax低÷ebx =eax……edx
+div ebx;edx高：eax低÷ebx =eax…edx
 cmp dx,0
 jz 没有超出_2;超出一个字节都需要读完整个扇区
 inc ax
@@ -506,7 +615,7 @@ jmp 返回
 dec word[循环次数-DOSstart]
 mov eax,[LBA-DOSstart]
 inc dword[LBA-DOSstart];推进到下一个扇区
-mov edx,0;清空LBA高位
+mov edx,0;LBA高位
 mov ebx,9000_0000h;缓存区，段地址
 mov bx,DOSEnd-DOSstart;偏移地址，在此处放置扇区
 call 读盘
@@ -548,18 +657,25 @@ FAT32_1:
 push bx
 push cx
 push si
+push es
+mov bx,9000h
+mov es,bx;需要写入文件名
 cmp byte[重置读取-DOSstart],0;标志
 jz 不要重置_2
 
-mov [文件属性-DOSstart],al;先标记为所有文件
-cmp al,0FFh
-jz 类型判断结束_1
-cmp al,2
-ja Er返回_1;大于则跳转
-mov byte[文件属性-DOSstart],0;标记文件
+mov byte[文件属性-DOSstart],20h;标记为文件
 cmp al,0
 jz 类型判断结束_1
-mov byte[文件属性-DOSstart],2;错误的文件夹标记
+mov byte[文件属性-DOSstart],10h;标记为文件夹
+cmp al,1
+jz 类型判断结束_1
+mov [文件属性-DOSstart],al;标记为所有
+cmp al,0FFh
+jz 类型判断结束_1
+stc
+jmp Er返回_1
+
+
 类型判断结束_1 mov byte[重置读取-DOSstart],0;设置为0下次就不会重新读文件扇区了
 mov eax,[当前目录簇号-DOSstart]
 mov [当前簇号-DOSstart],eax
@@ -568,7 +684,7 @@ mov [LBA-DOSstart],eax
 dec dl;减去一次
 mov [循环次数-DOSstart],dl;每个簇占用的扇区数
 
-mov edx,0;清空LBA高位
+mov edx,0;LBA高位
 mov ebx,9000_0000h;缓存区，段地址
 mov bx,DOSEnd-DOSstart;偏移地址，在此处放置扇区
 call 读盘
@@ -593,7 +709,7 @@ jz 长目录项
 cmp byte[bx+11],20h
 jnz 本项已被删除
 
-;短目录项:
+;短目录项
 mov si,bx;文件名
 push bp
 mov bp,si
@@ -677,16 +793,19 @@ inc sp
 
 扩展名结束:
 pop bp
-call 推到下一个项
-push word[bx+20];获取簇号高位
-push word[bx+26];获取簇号低位
-add bx,32;再次推进任意一个项占用的长度
-mov [当前扇区偏移量-DOSstart],bx
-pop eax
 mov dx,di
 sub dx,DOSEnd-DOSstart+2048;文件名缓存区，DX =文件名长度
 mov di,DOSEnd-DOSstart+2048;DI =文件名位置
+
+Do返回:;正常返回，下次还来
+push word[bx+20];获取簇号高位
+push word[bx+26];获取簇号低位
+pop eax;32位簇号
+add bx,32;再次推进任意一个项占用的长度
+mov [当前扇区偏移量-DOSstart],bx;刷
+
 Er返回_1:
+pop es
 pop si
 pop cx
 pop bx
@@ -741,14 +860,13 @@ jnz 继续取项内字符;已经结束嘞
 
 项结束:;;;;;;;;注意，没有校验
 call 推到下一个项
+mov al,[文件属性-DOSstart]
+cmp al,0FFh
+jz 要所有的类型_1
+cmp al,[bx+11]
+jnz 本项已被删除;不符合类型
 
-;cmp al,0FFh
-;jz 要所有的
-push word[bx+20];获取簇号高位
-push word[bx+26];获取簇号低位
-
-add bx,32;再次推进任意一个项占用的长度
-mov [当前扇区偏移量-DOSstart],bx
+要所有的类型_1:
 mov si,[待转换字符-DOSstart];字符起始
 mov di,si;DI被推到了后面，还原以不覆盖待转换字符
 ;dec si;减一以免取到下一个字符
@@ -776,11 +894,7 @@ jnz 继续转换_1
 mov dx,di;字符结束
 mov di,[待转换字符-DOSstart];字符起始
 sub dx,di;字符结束-字符起始=字符长度
-pop eax;转换为32位簇号
-pop si
-pop cx
-pop bx
-jmp 返回;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+jmp Do返回;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
 推到下一个项:
@@ -801,10 +915,8 @@ jnc 没有结束
 inc sp;jmp指令返回时的栈平衡
 inc sp
 mov byte[重置读取-DOSstart],1;下次则从头开始
-pop si
-pop cx
-pop bx
-jmp 返回
+stc
+jmp Er返回_1
 
 没有结束:
 mov [LBA-DOSstart],eax
@@ -813,14 +925,12 @@ mov [循环次数-DOSstart],dl
 
 不用下一个簇:
 mov eax,[LBA-DOSstart]
-mov edx,0;清空LBA高位
+mov edx,0;LBA高位
 mov ebx,9000_0000h;缓存区，段地址
 mov bx,DOSEnd-DOSstart;偏移地址，在此处放置扇区
 call 读盘
 inc dword[LBA-DOSstart]
 不用读盘 ret
-
-
 
 
 
@@ -879,10 +989,10 @@ LBA dd 0
 
 ;将会修改EAX,EDX寄存器
 ;输入
-;EAX >目标簇号
+;EAX =目标簇号
 ;输出
-;EAX >LBA号
-;EDX_DL >簇占用的扇区数
+;EAX =LBA号
+;EDX_DL =簇占用的扇区数
 ;如果链表末端则设置进位，EAX，EDX不变，链表结束
 ;乘法
 ;al×bl =ax，被乘数×被乘数 =积
@@ -911,20 +1021,20 @@ FAT数据区起始 dd 0
 
 
 
-;将会修改EAX，EBX，EDX寄存器
+;将会修改EAX，EBX，EDX，Si寄存器
 ;输入
 ;EAX >簇号
 ;输出
 ;EAX >下一个簇号
 ;除法
-;ax÷bl =al……ah，被除数÷除数 =商……余数
-;EDX高：EAX低÷EBX =EAX……EDX
+;ax÷bl =al…ah，被除数÷除数 =商…余数
+;EDX高：EAX低÷EBX =EAX…EDX
 ;算法
 ;簇号÷（扇区大小÷4）=余数是扇区内偏移，然后商×4=LBA号
 计算下一个簇号:
 movzx ebx,word[扇区大小-DOSstart]
 shr bx,2;512÷4，每个扇区可保存的目录数
-xor edx,edx;清空高位
+xor edx,edx;空
 div ebx;EAX >扇区号，DX >目录内偏移
 shl dx,2;×4
 push dx;读盘会修改DX我们要提前保存
@@ -933,7 +1043,7 @@ add eax,[iSO9660目录长度-DOSstart];你得到了LBA号，FAT表起始
 cmp eax,[标记LBA号-DOSstart];在同一张fat表内？
 jz 读取簇号;上次读过这张FAT表
 mov [标记LBA号-DOSstart],eax
-mov edx,0;清空LBA高位
+mov edx,0;LBA高位
 mov ebx,9000_0000h;缓存区，段地址
 mov bx,DOSEnd-DOSstart;偏移地址
 add bx,[扇区大小-DOSstart];过一个扇区，不能被覆盖
@@ -952,62 +1062,21 @@ ret
 
 
 
-
-
-
-
-
-
-
-
-
-
 ;输入
-;无
+;EAX =当前目录簇号
+;ECX =iSO9660目录长度，不是iSO9660则无视他
 ;输出
-; >文件参数
+;无
 设置文件系统参数:
-movzx bx,cs:[文件系统编号-DOSstart]
-shl bx,1;×2
-add bx,文件系统_2-DOSstart
-cmp bx,3*2
-stc;设置进位
-ja 返回;大于则跳转
-mov bx,cs:[bx]
-jmp bx
-
-文件系统_2:
-dw 0;null，错误处理
-dw iSO9660_2-DOSstart
-dw FAT32_2-DOSstart
-;dw -DOSstart
-
-
-;输入
-;EAX >LBA
-;ECX >文件长度
-;输出
-;无
-iSO9660_2:
-mov cs:[当前目录簇号-DOSstart],eax
-mov cs:[iSO9660目录长度-DOSstart],ecx
-mov byte cs:[重置读取-DOSstart],1
+cmp byte[文件系统编号-DOSstart],1
+jnz 不是iSO9660_1
+mov [iSO9660目录长度-DOSstart],ecx;或FAT表起始
+不是iSO9660_1 mov [当前目录簇号-DOSstart],eax
+mov byte[重置读取-DOSstart],1
 jmp 返回
-
-
-;输入
-;EAX >簇号
-;输出
-;无
-FAT32_2:
-mov cs:[当前目录簇号-DOSstart],eax
-mov byte cs:[重置读取-DOSstart],1
-jmp 返回
-
 
 当前目录簇号 dd 0
 iSO9660目录长度 dd 0
-
 
 
 
@@ -1016,7 +1085,7 @@ iSO9660目录长度 dd 0
 ;输出
 ;无
 重置文件读入状态:
-mov byte cs:[文件读入状态-DOSstart],1
+mov byte[重置读取-DOSstart],1
 jmp 返回
 
 ;----------------------------------------------------------------------------
@@ -1026,79 +1095,111 @@ jmp 返回
 
 
 ;输入
-;EA段|AX偏 EAX >缓存区
+;EC段|CX偏 ECX=缓存区
 ;输出
-;EAX >缓存区
-读入文件扇区:
-movzx bx,cs:[文件系统编号-DOSstart]
-shl bx,1;×2
-add bx,文件系统_3-DOSstart
-cmp bx,3*2
-stc;设置进位
-ja 返回;大于则跳转
-mov si,9000h
-mov ds,si;段地址，int13ah42的DS：SI，磁盘参数块需要
-mov bx,[bx]
-jmp bx
-
-文件系统_3:
-dw 0;null，错误处理
-dw iSO9660_3-DOSstart
-;dw FAT32_3-DOSstart
-;dw -DOSstart
-
+;读出一个扇区
+;读入文件扇区:
 
 iSO9660_3:
-push eax;参数，缓存区
-cmp byte[文件读入状态-DOSstart],0;标志
+cmp byte[重置读取-DOSstart],0;标志
 jz 不要重置_1
-mov byte[文件读入状态-DOSstart],0;设置为0下次就不会重新读文件扇区了
+mov byte[重置读取-DOSstart],0;设置为0下次就不会重新读文件扇区了
 mov eax,[当前目录簇号-DOSstart]
 mov [LBA-DOSstart],eax
 
 mov eax,[iSO9660目录长度-DOSstart]
 mov edx,0;清空除法高位
 movzx ebx,word[扇区大小-DOSstart]
-div ebx;edx高：eax低÷ebx =eax……edx
+div ebx;edx高：eax低÷ebx =eax…edx
 cmp dx,0
 jz 没有超出_3;超出一个字节都需要读完整个扇区
 inc ax
-没有超出_3 mov[循环次数_1-DOSstart],ax
+没有超出_3 inc ax;预推应对预减
+mov[循环次数-DOSstart],ax
 
 不要重置_1:
-cmp word[循环次数_1-DOSstart],0
-jnz 继续读取
-mov byte[文件读入状态-DOSstart],1;下次则从头开始
-add sp,4
-stc;设置进位
-jmp 返回
-
-继续读取:
-dec word[循环次数_1-DOSstart]
 mov eax,[LBA-DOSstart]
 inc dword[LBA-DOSstart];推进到下一个扇区
-pop ebx;参数，缓存区
-mov edx,0;清空LBA高位
+mov edx,0;LBA高位
+mov ebx,ecx;缓存区址
 call 读盘
+dec word[循环次数-DOSstart]
+jnz 返回;正常返回，下次还来
+mov byte[重置读取-DOSstart],1;下次则从头开始
+jmp 带进位返回;读取完毕
+
+
+
+FAT32_3:
+push eax
+push ebx
+push edx
+push si
+cmp byte[重置读取-DOSstart],0;标志
+jz 不要重置_3
+mov byte[重置读取-DOSstart],0;设置为0下次就不会重新读文件扇区了
+mov eax,[当前目录簇号-DOSstart]
+mov [当前簇号-DOSstart],eax
+mov byte[循环次数-DOSstart],1;触发计算簇
+
+不要重置_3:
+dec byte[循环次数-DOSstart];每个簇占用的扇区数
+jnz  继续读取_1;还不用下一个簇
+mov eax,[当前簇号-DOSstart]
+call 簇转LBA
+jc 读取完毕_1
+mov [LBA-DOSstart],eax
+mov [循环次数-DOSstart],dl
+mov eax,[当前簇号-DOSstart]
+call 计算下一个簇号
+mov [当前簇号-DOSstart],eax;存
+
+继续读取_1:
+mov eax,[LBA-DOSstart]
+inc dword[LBA-DOSstart];推进到下一个扇区
+mov edx,0;LBA高位
+mov ebx,ecx;缓存区址
+call 读盘
+
+Do返回_1:
+pop si
+pop edx
+pop ebx
+pop eax
 jmp 返回
 
-文件读入状态 db 1
-循环次数_1 dw 0
+读取完毕_1:
+mov byte[重置读取-DOSstart],1;标志，已读完，下次重新开始
+;自带进位
+jmp Do返回_1
+
+
+
+
+
+
+解析MasterBootRecord:
+mov eax,0;第一个扇区一般为MBR，也有可能是DBR
+mov edx,0;LBA高位
+mov ebx,9000_0000h;缓存区，段地址
+mov bx,DOSEnd-DOSstart;偏移地址，在此处放置扇区
+call 读盘
+cmp dword[bx+510],0AA55h;判断数
+jz 分区表正常
+mov si,未检测到分区表
+call 打印
+jmp $
+未检测到分区表 db 'invalid partition table',13,10,'Try using the fs command directly',13,10,0
+
+分区表正常 jmp $
+
+
+
+
+
+
 
 ;----------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 ;EAX，EBX，EDX，DI寄存器将会被修改
 ;输入
@@ -1107,8 +1208,8 @@ jmp 返回
 ;输出
 ;ES：DI >10进制ascall码，结尾为0，注意倒序应使用std指令
 ;除法
-;ax÷bl =al……ah，被除数÷除数 =商……余数
-;Edx高：Eax低÷Ebx =Eax……Edx
+;ax÷bl =al…ah，被除数÷除数 =商…余数
+;Edx高：Eax低÷Ebx =Eax…Edx
 二进制转十进制ascall码:
 mov bl,al
 mov al,0;用于标记结束
@@ -1239,8 +1340,7 @@ jmp UTF8转UTF16;继续转换
 
 
 stc
-UTF8转换结束:
-ret
+UTF8转换结束 ret
 
 
 
@@ -1254,7 +1354,7 @@ ret
 ;输出
 ;EBX =目标位置
 读盘:;读硬盘调用+增加dpa包是加扇区
-;nop;注意Bug
+;nop;注意Bug，参数正确但有时候依然无法读入扇区
 mov [偏移地址-DOSstart],ebx;低位段地址，高位偏移地址
 mov [LBA低位-DOSstart],eax
 mov [LBA高位-DOSstart],edx
@@ -1278,38 +1378,7 @@ LBA低位 dd 0;[8]低32位
 LBA高位 dd 0;[12]高32位
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-返回:
-pop ds
-pop sp
-mov ss,cs:[0FFFdh];还原栈
-retf;iret是int指令专用返回
-
-
-
-
-
-
-
-
-
-
+;----------------------------------------------------------------------------
 
 
 继续打印:;每个指令都很重要确保他们被正确执行
@@ -1342,25 +1411,22 @@ jmp $
 
 
 int_1:
-push ax
-push ds
-
+push ds;+4
+push ax;+2
 mov ax,9000h
 mov ds,ax
-
-push bx
+push bx;+0！
+mov bx,sp
+or word ss:[bx+6+4],100h
 push si
 mov si,哞-DOSstart
 call 打印
 pop si
 pop bx
-
-
-
-pop ds
 pop ax
+pop ds
 iret
-哞 db 10,'Moo~',0
+哞 db 'Moo~',0
 ; push bx
 ; pushf
 ; mov bx,sp
@@ -1420,7 +1486,7 @@ jmp short 停
 
 
 _cs_ip db '=Pi+61*SC',10,13
-错误的操作码 db 13,'Wrong opcode_',0
+错误的操作码 db 13,'Undefined opcode_',0
 
 
 
@@ -1442,7 +1508,7 @@ add ebx,esp
 add ebx,3;减int指令压的3个值
 call 二进制转十六进制ascall码
 mov si,_ss-DOSstart
-mov cx,7
+mov cx,9
 rep movsb
 
 mov ebx,esp
@@ -1456,13 +1522,10 @@ dec si;减一以免取到下一个字符
 std
 call 打印
 cld;恢复正序
-停_1:
-cli
-hlt
-jmp short 停_1
+jmp 停
 
 栈错误 db 13,10,'Stack fault',0
-_ss db '=61*SS+'
+_ss db '=)61*SS(+'
 _esp db '=PSE',13,10
 
 
@@ -1613,8 +1676,10 @@ mov si,_ESP寄存器-DOSstart
 mov cx,7
 rep movsb
 
+mov ax,bp;save
 mov bp,sp;什么C语言行为
 mov ebx,dword[bp+16];EDI的值
+mov bp,ax;复
 call 二进制转十六进制ascall码
 mov si,_EDI寄存器-DOSstart
 mov cx,7
