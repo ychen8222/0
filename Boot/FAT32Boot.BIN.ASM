@@ -65,7 +65,7 @@ mov ds,ax;数据段DS：BX，Si，Di
 ;mov ss,ax;堆栈段SS：SP，BP
 mov ax,文件读入的位置;第2段
 mov es,ax;附加段ES：Di
-mov sp,7c00h;临时栈
+;mov sp,7c00h;临时栈
 ;mov bp,sp;栈游标SS：BP
 
 mov byte ds:[驱动器号],dl;先保存驱动器号
@@ -152,14 +152,16 @@ push word es:[di+20];获取簇号高位
 push word es:[di+26];获取簇号低位
 pop eax;合成为32位
 shr bp,4;÷16，转成段地址
-mov di,es;读入第2个段
 
 读入文件:
+ mov ecx,eax
  call 簇转LBA;Edx 是簇中的扇区，EAX 是扇区
  jc 读入完成
- mov bx,di
- add di,bp;加
+ mov bx,es;读入第2个段
  call 读盘
+ add bx,bp;加
+ mov es,bx
+ mov eax,ecx
  call 计算下一个簇号
 jmp short 读入文件
 
@@ -168,7 +170,6 @@ mov si,换行
 call 显示
 mov bp,0AA55h;判断数，用于表示我们的引导扇区
 mov dh,2;文件系统编号
-mov dl,byte ds:[驱动器号]
 jmp 文件读入的位置:0;我的同行抖机灵只读一个簇就跳转过去了，让他解析表项自己读完自己，这样好吗？这样不好
 
 
@@ -212,7 +213,7 @@ ret
 
 
 ;给定一个簇号，找出下一个簇号
-;簇号÷（扇区大小×4） =商×4 =扇区号…余数，簇表内偏移
+;簇号÷（扇区大小×4）=商×4 =扇区号…余数，簇表内偏移
 ;输入
 ;EAX >簇号
 ;输出
@@ -274,8 +275,8 @@ ret
 ;输入
 ;EAX >LBA 低32位
 ;BX >段地址
+;DX =读入的扇区数
 ;输出
-;BX：0 >目标位置
 读盘:;读硬盘调用+增加DPA包 是加扇区
 push ds;push dword 0;[12]LBA高32位，这只是压个固定为0的寄存器，比压dword 0节省空间
 push ds;压够dword，压两次也比直接压dword 0节省空间
@@ -301,7 +302,7 @@ mov dx,读盘错误_1
 call 更多显示
 
 停 cli
-hlt
+ hlt
 jmp short 停
 
 
