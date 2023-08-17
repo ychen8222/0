@@ -276,7 +276,8 @@ mov eax,fs:[7c00h+52+4];820，fat表起始
 mov es:[iSO9660目录长度-DOSstart],eax
 mov eax,fs:[7c00h+52+8];1fe838，第一个数据扇区，全部值
 mov es:[FAT数据区起始-DOSstart],eax
-
+mov al,fs:[7c00h+64]
+mov es:[驱动器号-DOSstart],al
 
 mov si,换行
 add si,bp
@@ -303,7 +304,7 @@ mov al,'/'
 mov ah,14;功能号
 mov bh,0;页码
 int 10h
-
+jmp $
 mov al,0;文件
 mov cx,11
 mov si,COMMAND
@@ -646,6 +647,8 @@ call 对比文件属性
 jc 本项已被删除;属性错误
 
 mov [当前扇区偏移量-DOSstart],bx;刷
+push word[bx+20];获取簇号高位
+push word[bx+26];获取簇号低位
 mov ax,ds;交
 mov cx,es
 mov es,ax
@@ -739,12 +742,12 @@ inc sp;栈平衡
 inc sp
 
 扩展名结束:
-push word[bx+20];获取簇号高位
-push word[bx+26];获取簇号低位
 pop eax;32位簇号
 mov dx,di
 sub dx,DOSEnd-DOSstart+2048;文件名缓存区，DX =文件名长度
 mov di,DOSEnd-DOSstart+2048;Di =文件名位置
+cmp dx,4
+jz $
 ret;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
@@ -1111,11 +1114,11 @@ ret
 ;输出
 ;无
 设置文件系统参数:
-cmp byte[文件系统编号-DOSstart],1
+cmp byte cs:[文件系统编号-DOSstart],1
 jnz 不是iSO9660_1
-mov [iSO9660目录长度-DOSstart],ecx;或FAT表起始
-不是iSO9660_1 mov [当前目录簇号-DOSstart],eax
-mov byte[重置读取-DOSstart],1
+mov cs:[iSO9660目录长度-DOSstart],ecx;或FAT表起始
+不是iSO9660_1 mov cs:[当前目录簇号-DOSstart],eax
+mov byte cs:[标志-DOSstart],0
 jmp 返回
 
 当前目录簇号 dd 0
@@ -1287,20 +1290,19 @@ mov dx,di;save，名
 call 显示项名
 mov di,dx;原，名
 pop dx;原，长
-cmp cx,dx;长
+cmp dx,[esp];源文件名长度
 jnz 继续查找项;错误的文件名长度
-jmp $
-mov ax,di;save，名
+
+mov bx,di;save，名
 mov cx,dx;长
 call 转成大写_1
-mov di,ax;原，文件名
+mov di,bx;原，文件名
 mov cx,dx;长
 mov ds,[esp+2];段	
+mov eax,esi;原，返回簇号
 mov si,[esp+4];源文件名
 repe cmpsb
 jnz 继续查找项
-
-mov eax,esi;返回簇号
 
 没有匹配项:
 pop cx
@@ -1349,7 +1351,7 @@ ret
 
 
 
-;CX，Di寄存器将会被修改
+;AL，CX，Di寄存器将会被修改
 ;输入
 ;CX =字符长度
 ;ES：Di =字符位置
