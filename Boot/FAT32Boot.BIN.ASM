@@ -1,5 +1,6 @@
-﻿;============================================================================
+;============================================================================
 ;FAT32文件系统的引导扇区
+;MBR分区表最大支持2T大小的空间，FAT32最大也只支持2T大小，所以只使用LAB的低32位就行了
 
 ;2019年11月
 ;编写完成\
@@ -60,9 +61,9 @@ FAT表起始 dd 0
 
 
 初始化寄存器:;添加更多寄存器组合方式的注释
-xor ax,ax
-mov ds,ax;数据段DS：BX，Si，Di
-;mov ss,ax;堆栈段SS：SP，BP
+xor bp,bp
+mov ds,bp;数据段DS：BX，Si，Di
+;mov ss,bp;堆栈段SS：SP，BP
 mov ax,文件读入的位置;第2段
 mov es,ax;附加段ES：Di
 ;mov sp,7c00h;临时栈
@@ -82,7 +83,7 @@ call 显示
 xor eax,eax
 mov dword ds:[未使用12字节],eax;清空用于对比的LBA号
 
-mov ax,word ds:[保留扇区数];没有 movzx eax，字...需要
+mov ax,word ds:[保留扇区数];没有movzx eax，字...需要
 add eax,dword ds:[FAT区前隐藏扇区数]
 mov dword ds:[FAT表起始],eax;第一个FAT表扇区
 mov dword ds:[数据区起始],eax;数据区起始，仅值的第一部分
@@ -94,20 +95,16 @@ add dword ds:[数据区起始],eax;第一个数据扇区，全部值
 
 
 ;在根目录中检索文件
-;输入
-;=根目录起始簇号
-;输出
-;AX =目标文件的第一个簇号
 mov eax,dword ds:[根目录起始簇号]
 cld;清空df并向前推进
-xor bp,bp
+;xor bp,bp
 movzx cx,byte ds:[每个簇占用的扇区数]
 算簇大小 add bp,word ds:[扇区大小]
 loop 算簇大小
 
 下一个簇:
  push eax;保存目前的簇号
- call 簇转LBA;簇号转换为绝对扇区号，返回值中EDX是每个簇的扇区数，EAX是扇区号 
+ call 簇转LBA;簇号转换为绝对扇区号，返回值中Si是每个簇的扇区数，EAX是扇区号 
  jc 簇找完了;簇转LBA时发现簇查完了
  mov bx,es;读取到的段地址，使用ES的值以便配合Di
  call 读盘
@@ -151,11 +148,11 @@ jmp short 下一个簇
 push word es:[di+20];获取簇号高位
 push word es:[di+26];获取簇号低位
 pop eax;合成为32位
-shr bp,4;÷16，转成段地址
+shr bp,4;÷16，将整个簇占用的大小转成段地址
 
 读入文件:
- mov ecx,eax
- call 簇转LBA;Edx 是簇中的扇区，EAX 是扇区
+ mov ecx,eax;save，簇号
+ call 簇转LBA;Si是簇中的扇区，EAX是扇区
  jc 读入完成
  mov bx,es;读入第2个段
  call 读盘
@@ -173,6 +170,7 @@ mov dh,2;文件系统编号
 jmp 文件读入的位置:0;我的同行抖机灵只读一个簇就跳转过去了，让他解析表项自己读完自己，这样好吗？这样不好
 
 
+
 簇找完了:
 mov si,回车
 mov dx,没有文件
@@ -181,34 +179,31 @@ int 18h;返回BiOS
 
 
 
-;将会修改EAX,EDX寄存器
+;将会修改EAX，EDX，Si寄存器
 ;输入
-;eax >目标簇号
+;EAX >目标簇号
 ;输出
 ;EAX >LBA号
-;如果链表末端则设置进位，EAX，EDX不变，链表结束
+;Si =每个簇占用的扇区数
+;如果链表末端则设置进位EAX，EDX，Si不变，链表结束
 ;乘法
 ;al×bl =ax，被乘数×被乘数 =积
 ;EAX×EDX =EDX高：低EAX
+;算法
+;（簇号-2）×每个簇占用的扇区数+数据区起始扇区号=簇的LBA号
 簇转LBA:
 cmp eax,0FFFFFF8h;如果链表结束
+stc;通过进位表示已结束，预判失败也无妨
 jae 链表末端;等于大于则跳转，这是簇链的结束标志
-
-;簇号-2×每个簇占用的扇区数+数据区起始扇区号=簇的LBA号
-dec eax
+dec eax;簇号-2×每个簇占用的扇区数+数据区起始扇区号=簇的LBA号
 dec eax
 
 movzx edx,byte ds:[每个簇占用的扇区数];使用扩位传送覆盖DX的高位以进行32位乘法
-push dx;只有这个寄存器未被使用
+mov si,dx;用于返回读入的扇区数
 mul edx;edx是乘法的高位但我们不允许eax溢出到高位
-pop dx;不用压桟EDX以节省空间
 
-add eax,dword ds:[数据区起始];数据区起始扇区号
-ret;此时进位未设置，除非参数错误
-
-链表末端:
-stc;通过进位表示结束
-ret
+add eax,dword ds:[数据区起始];+数据区起始扇区号
+链表末端 ret;此时进位未设置，除非参数错误
 
 
 
@@ -234,7 +229,7 @@ cmp eax,dword ds:[未使用12字节];在同一张FAT表内？
 mov bx,200h;读到的位置，注意即使不用读盘也要设置缓存区来取上次的值
 jz 读取簇号;上次读过这张FAT表
 mov dword ds:[未使用12字节],eax;使用LBA号进行标记
-mov dx,1;读取的扇区数
+mov si,1;读取的扇区数
 call 读盘;只需要读一个扇区的FAT表即可
 
 读取簇号:
@@ -277,14 +272,14 @@ ret
 ;BX >段地址
 ;DX =读入的扇区数
 ;输出
-读盘:;读硬盘调用+增加DPA包 是加扇区
-push ds;push dword 0;[12]LBA高32位，这只是压个固定为0的寄存器，比压dword 0节省空间
-push ds;压够dword，压两次也比直接压dword 0节省空间
-push eax;[8]LBA低32位
+读盘:
+push ds;[12]LBA高32位
+push ds;目的是压入dword大小的0，压两次空的段寄存器也比直push dword 0要节省空间
+push eax;[8]LBA低32位，只使用了LBA的低32位，最大支持2T的磁盘空间
 push bx;[6]段地址
 push ds;push 0;[4]偏移地址，这只是压个固定为0的寄存器，比压word 0节省空间
-;byte[3]保留，必须为0，注意堆栈最小压word
-push dx;byte 1;[2]要传输的块数0~127
+;byte[3]保留，必须为0，注意堆栈最小压word，上面压的已溢出至这
+push si;byte 1;[2]要传输的块数0~127
 ;byte[1]保留，必须为0，DX的高位就是这里的值应当清空DH寄存器，注意堆栈最小压word
 push byte 16;[0]参数块大小，高位为0正好用于保留处
 
@@ -293,6 +288,7 @@ mov dl,byte ds:[驱动器号]
 mov ah,42h;扩展调用
 int 13h
 jc 读盘错误;如果读取失败则中止
+
 add sp,16;从堆栈中删除参数块
 ret
 
@@ -301,7 +297,8 @@ mov si,换行
 mov dx,读盘错误_1
 call 更多显示
 
-停 cli
+停:
+ ;cli;会导致某些虚拟机报错
  hlt
 jmp short 停
 
