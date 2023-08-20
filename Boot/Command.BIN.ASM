@@ -1,13 +1,15 @@
 ;----------------------------------------------------------------------------
-;命令处理，难度★★★★☆
+;命令处理
 ;使用中断取字符，大部分BIOS会休眠CPU，但vmbox是个例外
 ;命令一般比较长所以将其放在缓存区的最后以免覆盖重要数据
+
 ;2023：6:19：8:1
 ;@cya
 ;----------------------------------------------------------------------------
 ;内存布局
-;80000～8FFFF_Command.BIN
-push 8000h
+Command的基地址 equ 70000h;～7FFFF_Command.BIN
+
+push Command的基地址/16
 pop ds
 dec sp;复
 dec sp
@@ -27,13 +29,13 @@ pop bx;文件系统序号
 mov [文件系统编号],bl
 shl bx,1;×2
 ;cmp bx,4*2
-add bx,文件系统类型表;+基地址
-mov bx,[bx]
+mov bx,cs:[bx+文件系统类型表];+基地址
 jmp bx;CS段，BX偏移
 
 文件系统类型表:
 dw 0;无法确定文件系统类型
 dw iSO9660
+dw FAT32_1
 
 
 
@@ -43,27 +45,37 @@ mov word[预留参数长度],8
 stosd;LBA号
 mov eax,ecx;长度
 stosd
-
 mov si,iSO9660文件系统
-;mov di,缓存区
-push cx
 mov cx,7
+jmp 继续准备显示的字符
+
+
+FAT32_1:
+mov di,缓存区
+mov word[预留参数长度],8
+stosd;簇号
+add di,4;无用的
+mov si,FAT32
+mov cx,5
+
+
+
+继续准备显示的字符:
 rep movsb
 mov ax,2Fh;斜杠+结束符
 stosw
-mov [路径显示结束],di
 
 mov ax,di
 inc ax;用两个字节word来存储当前路径项的长度
 inc ax
 sub ax,缓存区;取偏移，别忘了减去基地址
-stosw
-mov es:[路径缓存区结束],di
-mov es:[簇号缓存区结束],di;注意，会覆盖掉第一次的命令
+stosw;本项全长
+mov [路径参数结束],di
+mov [簇号缓存区结束],di;注意，会覆盖掉第一次的命令
 
 
 滚回去:
-mov sp,8000h
+mov sp,Command的基地址/16
 mov ds,sp
 mov es,sp
 mov ss,sp
@@ -78,10 +90,12 @@ mov si,缓存区;用于显示路径
 继续打印路径:
 add si,[预留参数长度];跳过前面的数据
 call 打印
-cmp si,[路径显示结束]
+inc si;推，本项长度记录
+inc si
+cmp si,[路径参数结束]
 jnz 继续打印路径
 
-mov si,[簇号缓存区结束];用于取字符
+mov si,[路径参数结束];用于取字符
 mov di,si;用于存字符
 
 等待指令:
@@ -90,7 +104,7 @@ mov di,si;用于存字符
  cmp al,8h
  jnz 不是退格
 
- cmp di,[簇号缓存区结束];不能覆盖到后面的簇数据
+ cmp di,[路径参数结束];不能覆盖到后面的簇数据
  jz 删到头了
  dec di;删个字符
  删到头了 mov bx,0h;先退个格
@@ -181,16 +195,16 @@ mov dx,1;第一次是一定要制表的
 jnz 处理指令;也不是空格就继续取命令
 
 下下下:
-test bx,8000h;我们给最终结果设置一个标记，如果没有这个标志将不采用
-jz 除了字母以外的都不要
-sub bx,8000h;减去我们设置的标记
-mov bx,[bx+位置表];取最终地址
-cmp bx,0
-jz _0000;还没实现
-jmp bx
+cmp bx,命令寻址表结束;指针还在表内吗
+jb 除了字母以外的都不要;小于则跳转，如果指针还在表内则地址不能跳转
+
+;cmp bx,0
+;jz _0000;还没实现
+
+jmp bx;跳转至CS：BX
 
 命令字符缓存区开始 dw 0
-路径显示结束 dw 0
+路径参数结束 dw 0
 
 
 _0000:
@@ -257,7 +271,7 @@ db 0;结束符，可用
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 含cd:
 db D_4-命令缓存区
-dw cd-位置表+8000h;表内偏移，在最高位加个标记，用来表示这是最终值可以使用了
+dw cd
 db 0;结束符
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 含dirDrvnum_2:
@@ -269,7 +283,7 @@ db 0
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 含dir_3:
 db R_18-命令缓存区
-dw dir-位置表+8000h;全部同上所诉
+dw dir
 db 0
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 含Drvnum_3:
@@ -280,14 +294,14 @@ dw 含Drvnum_3-数据表
 db U_21-命令缓存区
 dw 含Drvnum_3-数据表
 db M_13-命令缓存区
-dw drvnum-位置表+8000h
+dw 0;drvnum
 db 0
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 含LsLg:
 db S_19-命令缓存区
-dw Ls-位置表+8000h
+dw Ls
 db G_7-命令缓存区
-dw lg-位置表+8000h
+dw 0;lg
 db 0
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 含openOff_2:
@@ -299,21 +313,21 @@ db 0
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 off_3:;只能新建一个表来处理叠词，有点浪费不过也只能这样了
 db F_6-命令缓存区
-dw off-位置表+8000h
+dw 0;off
 db 0
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 含open_3:
 db E_5-命令缓存区
 dw 含open_3-数据表
 db N_14-命令缓存区
-dw open-位置表+8000h
+dw open
 db 0
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 含run_2:
 db U_21-命令缓存区
 dw 含run_2-数据表;0FFFFh，用于调试
 db N_14-命令缓存区
-dw run-位置表+8000h
+dw run
 db 0
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 含help_2:
@@ -322,7 +336,7 @@ dw 含help_2-数据表
 db L_12-命令缓存区
 dw 含help_2-数据表
 db P_16-命令缓存区
-dw help-位置表+8000h
+dw 0;help
 db 0
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 含shutdown_2:
@@ -339,48 +353,20 @@ dw 含shutdown_2-数据表
 db W_23-命令缓存区
 dw 含shutdown_2-数据表
 db N_14-命令缓存区
-dw shutdown-位置表+8000h
+dw 0;shutdown
 db 0
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 含fs_2:
 db S_19-命令缓存区
-dw _fs-位置表+8000h
+dw _fs
 db 0
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+命令寻址表结束:
 
 
-位置表:
-Ls dw 实现_Ls
-dir dw 实现_dir
-
-drvnum dw 0
-_fs dw 实现_fs
-cd dw 实现_cd
-shutdown dw 0
-off dw 0
-open dw 实现_open
-run dw 实现_run
-help dw 0
-
-lg dw 实现_lg
 
 
-实现_lg:
-mov eax,1;MBR分区吗
-mov edx,0;高位LBA
-mov bx,0FFFFh
-shl ebx,16;《段地址移到高位
-mov bx,cs:[路径缓存区结束];偏移地址，在此处放置扇区
-mov ecx,1;只读一个扇区
-call 读盘
-
-cmp dword cs:[路径缓存区结束+510],0AA55h
-jz 分区表正常
-
-mov si,告诉她们没有分区表
-call 打印
-jmp 滚回去
-告诉她们没有分区表 db 'invalid partition table',13,10,'Try using the fs command directly',13,10,0
+lg:
 
 分区表正常:
 mov cl,0;MBR最大支持4个分区
@@ -391,7 +377,7 @@ add bx,446;跳过前面的引导代码
  jz 没有个分区
 
  movzx eax,cl
- mov di,路径缓存区结束;将转换后的字符存储在这里
+ mov di,[路径参数结束];将转换后的字符存储在这里
  call 二进制转十进制ascall码
  push bx;save
  call 打印
@@ -471,7 +457,7 @@ mov bx,0
 mov ah,14;BIOS中断参数
 int 10h;显示字符
 
-mov bx,cs:[路径缓存区结束]
+mov bx,cs:[路径参数结束]
 sub al,'1';从字符变为数值
 mov ah,0;清空高位以便进行加法
 shl ax,4;×16
@@ -496,14 +482,14 @@ Linux db 'Linux',0
 
 
 
-实现_fs:
+_fs:
 mov eax,16;iso9660主卷描述符
 mov edx,0;高位LBA
 mov bx,0FFFFh
 shl ebx,16;《段地址移到高位
-mov bx,cs:[路径缓存区结束];偏移地址，在此处放置扇区
+mov bx,cs:[路径参数结束];偏移地址，在此处放置扇区
 mov ecx,1;只读一个扇区
-call 读盘
+
 
 cmp dword cs:[bx],01434430h;1_CD0
 jnz 未检测到文件系统
@@ -570,132 +556,243 @@ mov si,告诉她没检测到文件系统
 call 打印
 jmp 滚回去
 
-告诉她没检测到文件系统 db '123456',13,10,0
+告诉她没检测到文件系统 db 'Nano',13,10,0
 按一使用设定 db '123456',13,10,0
 
 
 
-实现_Ls:
-实现_dir:
-mov si,回车换行
+Ls:
+dir:
+;文件系统类型表_1:
+;dw 不支持的文件系统
+;dw 所有文件系统通用;iSO9660
+;dw 所有文件系统通用;FAT32
+mov si,换行回车换行
 call 打印
-mov si,回车换行
-call 打印
-movzx bx,byte[文件系统编号]
-shl bx,1;×2
-add bx,文件系统类型表_1;加上基地址
-mov bx,[bx];取最终地址
-mov ax,9000h;文件名在DOS段内
-mov fs,ax
-mov ax,[路径缓存区结束];重置缓存区
-mov [簇号缓存区结束],ax
-jmp bx
-
-文件系统类型表_1:
-dw 不支持的文件系统
-dw iso9660_列出
-;dw FAT
-
-
-不支持的文件系统:
-mov si,不支持的文件系统_
-call 打印
-jmp 滚回去
-不支持的文件系统_ db 10,'Unsupported file system',10,0
-
-
-iso9660_列出:
 mov al,0FFh;获取所有类型的文件
 
-iso9660_显示文件名:
+所有文件系统通用:
 mov bx,4;获取一个文件项
 int 21h
-jc 项取完了
-mov cx,dx;int21输出，文件名长度
+jc 滚回去;项取完了
 
-显示完文件名:
- mov al,fs:[di]
- inc di;推
- mov bh,0;页码
- mov ah,14;BIOS中断参数
- int 10h;显示字符
-loop 显示完文件名
+mov cx,dx;int21输出，文件名长度
+call 打印文件文件或文件夹名
 mov si,回车换行
 call 打印
-jmp iso9660_显示文件名
-
-项取完了 jmp 滚回去
+jmp 所有文件系统通用;续
 
 
 
 
-实现_open:
-实现_run:
+
+
+
+open:
+run:
 mov si,换行
 call 打印
 movzx bx,byte [文件系统编号]
 shl bx,1;×2
-add bx,文件系统类型表_2;加上基地址
-mov bx,[bx];取最终地址
+mov bx,[bx+文件系统类型表_2];取最终地址
 mov word[目录项序号],0;清空计数
 mov ax,9000h;文件名在DOS段内
 mov fs,ax
-mov ax,[路径缓存区结束];重置缓存区
+mov ax,[路径参数结束];重置缓存区
 mov [簇号缓存区结束],ax
 jmp bx
 
 文件系统类型表_2:
-dw 不支持的文件系统
+dw 0;null
 dw iso9660_读入
-;dw FAT
+dw FAT32_读入
+
 
 
 iso9660_读入:
 mov al,0;获取一个文件项
-mov bx,4
-int 21h
-jc 滚回去
-push dx;int21输出的文件名长度
-jmp 第一次则插入
 
 继续获取项:
 mov bx,4;获取一个文件项
 int 21h
 jc 没了
-push dx;int21输出的文件名长度
-
-第一次则插入:
 mov bx,[簇号缓存区结束]
 cmp bx,0FFF0h
-ja 没了_1;大于则跳转，簇号存不下了，注意栈平衡
+ja 没了;大于则跳转，簇号存不下了，注意栈平衡
 mov [bx],eax;LBA号
 mov [bx+4],ecx;数据长度
 add word [簇号缓存区结束],8;推进到下一个位置
+call 显示序号和文件名
+jmp 继续获取项
 
+
+没了:
+mov ax,[簇号缓存区结束]
+cmp ax,[路径参数结束]
+jz 滚回去;没有任何项
+mov si,回车换行
+call 打印
+
+重新选择:
+mov ax,ds
+mov es,ax
+call 获取输入数字并转换为数值
+shr bx,3;÷8，将项占用的大小转换为项的个数
+dec bx;减去预推进到的下一个项
+cmp eax,ebx;你输入的数字过大，甚至超过AX
+jbe 输入的数字正常;小于等于则跳转
+mov si,没有这样的选择
+call 打印
+jmp 重新选择
+
+没有这样的选择 db 10,'No such option',13,10,0
+
+输入的数字正常:
+push ax;+10，save输入的序号
+mov bx,1;取文件系统参数，保存原参数
+int 21h
+push eax;+8，保
+push ecx;+4
+push dx;+0，扇区大小
+
+mov bx,[esp+10];输入的序号
+shl bx,3;×8，变表内偏移
+add bx,[路径参数结束];加上基地址
+mov eax,[bx];根目录的目录项+2双端格式的范围位置 (LBA)，2~8÷2
+mov ecx,[bx+4];根目录的目录项+10双端格式的数据长度（范围大小）
+mov bx,5;设置文件系统参数
+int 21h
+
+mov ecx,50_0000h;读入的位置
+sub cx,[esp];减预推
+
+iso9660_继续读入:
+add cx,[esp];推
+mov bx,7
+int 21h
+jnc iso9660_继续读入
+
+inc sp;删压的扇区大小
+inc sp
+pop ecx
+pop eax
+mov bx,5;还原之前的，文件系统参数
+int 21h
+inc sp;栈平衡，删压的输入序号
+inc sp
+jmp 0:500h;跳入
+
+输入序列号选择打开文件 db 10,'Enter the serial number to choose to open the file #',0
+
+
+
+
+FAT32_读入:
+mov al,0;获取一个文件项
+
+继续获取项_1:
+mov bx,4
+int 21h
+jc 没了_3
+
+mov bx,[簇号缓存区结束]
+cmp bx,0FFF0h
+ja 没了_3;大于则跳转，簇号存不下了，注意栈平衡
+
+mov [bx],eax;LBA号
+add word[簇号缓存区结束],4;刷，推进到下一个位置
+call 显示序号和文件名
+jmp 继续获取项_1;继续获取项
+
+没了_3:
+mov ax,[簇号缓存区结束]
+cmp ax,[路径参数结束]
+jz 滚回去;没有任何项
+mov si,回车换行
+call 打印
+
+重新选择_2:
+mov ax,ds
+mov es,ax
+call 获取输入数字并转换为数值
+shr bx,2;÷4，将项占用的大小转换为项的个数
+dec bx;减去预推进到的下一个项
+cmp eax,ebx;你输入的数字过大，甚至超过AX
+jbe 输入的数字正常_2;小于等于则跳转
+mov si,没有这样的选择
+call 打印
+jmp 重新选择_2
+
+输入的数字正常_2:
+push ax;+6，save输入的序号
+mov bx,1;取文件系统参数，保存原参数
+int 21h
+push eax;+2，保
+push dx;+0，扇区大小
+
+mov bx,[esp+6];输入的序号
+shl bx,2;×4，变表内偏移
+add bx,[路径参数结束];加上基地址
+mov eax,[bx];簇号
+mov bx,5;设置文件系统参数
+int 21h
+
+mov ecx,50_0000h;读入的位置
+sub cx,[esp];减预推
+
+继续读入:
+add cx,[esp];推
+mov bx,7
+int 21h
+jnc 继续读入
+
+inc sp;删压的扇区大小
+inc sp
+pop eax
+mov bx,5;恢复原根目录
+int 21h
+inc sp;栈平衡，删压的输入序号
+inc sp
+jmp 0:500h;跳入
+
+
+
+
+
+
+
+显示序号和文件名:
 movzx eax,word[目录项序号]
 inc word[目录项序号];推
+push dx;int21输出的文件名长度
 push di;int21输出的字符位置
 mov di,[簇号缓存区结束]
 call 打印序号
 pop di;文件名的位置，用于显示
-pop dx;int21输出的文件名长度
+pop cx;int21输出的文件名长度
 call 打印文件文件或文件夹名
-jmp 继续获取项
+ret
 
 
-没了_1:
-inc sp;平
-inc sp
-没了:
-mov si,回车换行
-call 打印
-重新选择:
+
+;EAX，EBX，ECX，Si，Di寄存器将会被修改
+;输入
+;键盘输入数字
+;输出
+;EAX =数值
+;EBX =项占用的长度，用于对比输入的数字大于文件项总数
+获取输入数字并转换为数值:
 mov si,输入序列号选择打开文件
 call 打印
 mov di,[簇号缓存区结束];序号缓存区
 mov si,di;续
 call 取数字
-jnz 你输入了序号
+jz 显示什么也没做
+mov byte[di],0;结束符
+call 十进制ascall码转二进制;EAX =数值
+movzx ebx,word[簇号缓存区结束];使用movzx指令以便下面对比
+sub bx,[路径参数结束]
+ret
 
 显示什么也没做:
 mov si,什么也没做
@@ -703,87 +800,16 @@ call 打印
 jmp 滚回去
 什么也没做 db 10,'Did nothing',10,0
 
-你输入了序号:
-mov byte[di],0;结束符
-call 十进制ascall码转二进制;EAX =数值
-
-movzx ebx,word[簇号缓存区结束];使用movzx指令以便下面对比
-sub bx,[路径缓存区结束]
-shr bx,3;除以8
-dec bx;减预推进
-cmp eax,ebx;你输入的数字过大，甚至超过AX
-jbe 输入的数字正常;小于等于则跳转
-mov si,没有这样的选择
-call 打印
-jmp 重新选择
-没有这样的选择 db 10,'No such option',13,10,0
-
-输入的数字正常:
-push ax;输入的序号
-mov bx,1;存原参数
-int 21h
-push eax
-push ecx
-
-add sp,8;取栈更上面的数据
-pop bx;输入的序号
-sub sp,10;原
-shl bx,3;×8
-add bx,[路径缓存区结束]
-mov eax,[bx];根目录的目录项+2双端格式的范围位置 (LBA)，2~8÷2
-mov ecx,[bx+4];根目录的目录项+10双端格式的数据长度（范围大小）
-mov bx,5;设置参数
-int 21h
-
-mov eax,50_0000h;读入的位置
-
-iso9660_继续读入:
-push dx
-push eax
-mov bx,7
-int 21h
-pop eax
-pop dx;扇区大小
-pushf;压标志位
-add ax,dx;推
-popf
-jnc iso9660_继续读入
-
-pop ecx
-pop eax
-mov bx,5;设置参数
-int 21h
-
-jmp 0:500h
-
-输入序列号选择打开文件 db 10,'Enter the serial number to choose to open the file #',0
 
 
 
 
 
-实现_cd:
+cd:
 mov si,换行
 call 打印
-movzx bx,byte[文件系统编号]
-shl bx,1;×2
-add bx,文件系统类型表_3;加上基地址
-mov bx,[bx];取最终地址
-mov ax,9000h;文件名在DOS段内
-mov fs,ax
-mov ax,[路径缓存区结束];重置缓存区
-mov [簇号缓存区结束],ax
-jmp bx
 
-文件系统类型表_3:
-dw 不支持的文件系统
-dw iso9660_实现cd
-;dw FAT
-
-
-
-iso9660_实现cd:
-mov si,[路径缓存区结束]
+mov si,[路径参数结束]
 跳过空格_2 lodsb
 cmp al,' '
 jz 跳过空格_2
@@ -805,31 +831,31 @@ jnz 不是返回上一级目录;不是
 跳过空格_4 lodsb
 cmp al,' '
 jz 跳过空格_4
-cmp al,0dh
+cmp al,0dh;结束符
 jnz 不是返回上一级目录;暗藏悬只因
-
-mov bx,[路径缓存区结束]
-sub bx,[bx-2];在项的尾部存储着本项长度
+mov bx,[路径参数结束]
+sub bx,[bx-2];在项的尾部存储着本项全长
 cmp bx,缓存区;到头了
 jnz 后退可行
 mov si,无路可退
 call 打印
 jmp 滚回去
-无路可退 db 10,'No retreat',13,10,0
+无路可退 db 'No retreat',13,10,0
 
+刷新当前目录 mov bx,[路径参数结束];取本项来刷新
 
-刷新当前目录 mov bx,[路径缓存区结束];取本项来刷新
 后退可行:
-mov [路径缓存区结束],bx;新的位置，忽略前面
+mov [路径参数结束],bx;新的位置，忽略前面
 sub bx,[bx-2];取本项参数，在上面已经退了一个项
 mov eax,[bx];LBA
-mov ecx,[bx+4];长度
+mov ecx,[bx+4];长度，iSO9660专属，不是则无视他
 mov bx,5;设置文件系统参数
 int 21h
-jmp 滚回去
+jmp 滚回去;;;;;;;;;;
 
-不是返回上一级目录:;;;;;;;;;;
-mov ax,[路径缓存区结束]
+
+不是返回上一级目录:
+mov ax,[路径参数结束]
 push ax;-2，项缓存区结束
 push 0;-0，项计数
 mov al,1;文件夹项
@@ -847,11 +873,14 @@ jc 没了_2
 第一次则插入_1:
 mov bx,ss:[esp+2];项缓存区结束
 mov [bx],eax;簇号
-mov [bx+4],ecx;长度
+mov [bx+4],ecx;;长度，iSO9660专属，不是则无视他
 mov [bx+8],dx;文件夹名长度
 add bx,10;推
 push di;-2，续
 push  dx;-0
+
+mov ax,es;文件名在DOS段内
+mov fs,ax
 
 继续复制字符:
 dec dx
@@ -868,18 +897,22 @@ movzx eax,word ss:[esp+2+2];项计数
 inc word ss:[esp+2+2];推
 mov di,bx;项缓存区结束后用于序号字符缓存区
 call 打印序号
-pop dx;长
+pop cx;长
 pop di;字
 call 打印文件文件或文件夹名
 jmp 获取文件夹项
 
 没了_2:
-mov bx,[路径缓存区结束]
+mov ax,Command的基地址/16
+mov es,ax
+mov bx,[路径参数结束]
 cmp bx,ss:[esp+2];项缓存区结束
 jz $;缓存区是空的，没有文件夹项
 
 
 重新选择_1:
+mov si,回车换行
+call 打印
 mov si,输入序列号选择打开文件
 call 打印
 mov di,ss:[esp+2];项缓存区结束后用于数字字符缓存区
@@ -896,7 +929,7 @@ call 打印
 jmp 重新选择_1
 
 输入的数字正常_1:
-mov bx,[路径缓存区结束]
+mov bx,[路径参数结束]
 
 推进项:;注意，以后需要建立快速索引表
 dec ax;项计数
@@ -908,79 +941,38 @@ jmp 推进项
 推进结束:
 mov eax,[bx];簇号
 mov ecx,[bx+4];长度
+mov dx,[bx+8];save文件夹名长度
+lea si,[bx+10];为下面取值，相当于mov si,bx  add si,10，跳过3个参数
 mov bx,5;设置文件系统参数
 int 21h
-mov cx,[bx+8];文件夹名长度
-mov si,bx
-add si,10;推，跳过3个参数
 
+mov cx,dx;文件夹名长度
+mov di,[路径参数结束]
+mov dx,di;save
+stosd;LBA号
+mov eax,ecx;长度
+stosd
 
-
-
-
-
-
-
-
-
-
-
-jmp $
-
-
-
-call 显示寄存器
-
-
-
-
-mov si,cx;恢复
-inc si;跳过cd命令前的一个空格
-跳过空格_5 lodsb
-cmp al,' '
-jz 跳过空格_5
-mov di,[路径缓存区结束]
-mov bx,di
-add di,[预留参数长度];预留参数位置
-mov ax,0
-继续复制:
-inc ax;记录字符数
-movsb
-cmp byte[si],0dh;直到遇到回车符，否则还没结束
-jnz 继续复制
-mov cx,ax;字符长度
-add ax,[预留参数长度];加上参数位置
-inc ax;加上斜杠和结束符
-inc ax
-mov [bx],ax
-mov ax,2Fh;斜杠和结束符
+rep movsb
+mov ax,2Fh;斜杠+结束符
 stosw
-mov [路径缓存区结束],di;更新
 
-mov si,bx;路径字符
-push si;原路径
-;cx字符长度
-
-
-
-
+lea ax,[di+2];相当于mov ax,di  add ax,2，跳过3个参数，用两个字节word来存储当前路径项的长度
+sub ax,dx;取偏移，别忘了减去基地址
+stosw;本项全长
+mov [路径参数结束],di;刷
+mov [簇号缓存区结束],di;注意，会覆盖掉第一次的命令
+jmp 滚回去
 
 
 
 
 
 
-
-
-
-
-
-当前目录字符长度 dw 0
-路径缓存区结束 dw 0;在此之后是路径
 预留参数长度 dw 0
 簇号缓存区结束 dw 0
 
-读盘:
+
 
 
 ;EAX，EBX，EDX，Si，Di寄存器将会被修改
@@ -990,6 +982,9 @@ push si;原路径
 ;输出
 ;显示序号#
 打印序号:
+push es;save
+mov bx,Command的基地址/16
+mov es,bx;转换为ascall码时需要
 call 二进制转十进制ascall码
 mov word es:[di],0d0ah;回车
 mov si,di
@@ -998,29 +993,27 @@ std;倒
 call 打印
 cld;正
 mov al,'#'
-mov bh,0;页码
 mov ah,14;BIOS中断参数
 int 10h;显示字符
+pop es;revert
 ret
 
 
 
 ;AX，BH，Di寄存器将会被修改
 ;输入
-;FS：Di =字符串
-;DX =字符长度
+;ES：Di =字符串
+;CX =字符长度
 ;输出
 ;显示字符串
 打印文件文件或文件夹名:
- dec dx
- jns 继续打印_1
- ret
- 继续打印_1 mov al,fs:[di]
+ mov al,es:[di]
  inc di;推
  mov bh,0;页码
  mov ah,14;BIOS中断参数
  int 10h;显示字符
-jmp 打印文件文件或文件夹名
+loop 打印文件文件或文件夹名
+ret
 
 
 
@@ -1091,6 +1084,7 @@ ret
 jnz 继续打印
 ret
 
+换行回车换行 db 10
 回车换行 db 13
 换行 db 10,0
 
@@ -1098,7 +1092,7 @@ ret
 
 ;EAX，EBX，ECX，SI寄存器将会被修改
 ;输入，非数字符会发生？
-;ES：SI >字符串，需带结束符
+;DS：Si >字符串，需带结束符
 ;输出
 ;EAX >数值
 十进制ascall码转二进制:
@@ -1132,9 +1126,9 @@ ret
 ;EAX，EBX，EDX，DI寄存器将会被修改
 ;输入
 ;EAX >待转换数值
-;ES：DI >缓存区
+;ES：Di >缓存区
 ;输出
-;ES：DI >10进制ascall码，结尾为0，注意倒序应使用std指令
+;ES：Di >10进制ascall码，结尾为0，注意倒序应使用std指令
 ;除法
 ;ax÷bl =al……ah，被除数÷除数 =商……余数
 ;Edx高：Eax低÷Ebx =Eax……Edx
