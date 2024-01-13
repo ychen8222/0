@@ -130,24 +130,22 @@ mov si,换行
 call 打印
 mov ax,[缓存区_1+128]
 mov [扇区大小],ax
-mov ebx,[缓存区_1+156+2];根目录的目录项+2双端格式的范围位置 (LBA)，2~8÷2
+mov ecx,[缓存区_1+156+2];根目录的目录项+2双端格式的范围位置 (LBA)，2~8÷2
 mov eax,[缓存区_1+156+10];根目录的目录项+10双端格式的数据长度（范围大小）
-mov [根目录逻辑扇区],ebx;备份Loader需要的参数
+mov [根目录逻辑扇区],ecx;备份Loader需要的参数
 mov [根目录大小],eax;RootSize
-mov cx,BOOT
-mov dl,1;获取的类型为文件夹
-mov si,4;文件夹名长度
-call iSO9660对比项
+mov si,BOOT
+mov bl,1;获取的类型为文件夹
+call iSO9660的检索文件或文件夹
 jc 没有找到BOOT文件夹
 
 call 打印斜杠
-mov cx,LOADER
-mov dl,0;获取的类型为文件
-mov si,10;文件名长度
-call iSO9660对比项
+mov si,LOADER
+mov bl,0;获取的类型为文件
+call iSO9660的检索文件或文件夹
 jc 没有找到LOADER文件
 
-mov ecx,缓存区_1
+mov ebx,缓存区_1
 call iSO9660读入扇区
 mov eax,[根目录大小]
 mov bx,[扇区大小]
@@ -185,13 +183,13 @@ mov eax,[缓存区_1+156+10];根目录的目录项+10双端格式的数据长度
 mov [根目录逻辑扇区],ebx;备份Loader需要的参数
 mov [根目录大小],eax;RootSize
 mov si,BOOT
-mov dl,1;需要文件夹
+mov bl,1;需要文件夹
 call Joliet的检索文件或文件夹
 jc 没有找到BOOT文件夹
 
 call 打印斜杠
 mov si,LOADER
-mov dl,0;需要文件
+mov bl,0;需要文件
 call Joliet的检索文件或文件夹
 jc 没有找到LOADER文件
 
@@ -233,21 +231,37 @@ int 18h;返回BiOS
 
 
 ;将会修改EAX，EBX，CX，DX，Si，Di寄存器
-;输入EAX数据长度，EBX逻辑扇区号，CX文件名位置，DL属性，Si文件名长度
-;输出EAX数据长度，EBX逻辑扇区号
-iSO9660对比项:
+;输入EAX数据长度，ECX逻辑扇区号，CX文件名位置，BL属性，Si文件名长度
+;输出EAX数据长度，ECX逻辑扇区号
+iSO9660的检索文件或文件夹:
 sub sp,8
 mov byte[esp+0],0;第1项文件名长度
-mov [esp+1],cx;第2项文件名位置
-mov [esp+3],si;第2项文件名长度
+mov [esp+1],si;第2项文件名位置
+;mov [esp+3],;第2项文件名长度
 mov word[esp+5],0;光标位置
 mov byte[esp+7],1;上1项字符长度 应该是0但使用此值会导致某些BiOS清空全屏，所以使用1来解决
-mov bp,ax
-mov [u16_1],bx
-mov [u8_1],dl
-cmp si,8
+mov ebp,eax
+mov [u16_1],cx
+mov cx,si
+
+计算文件或文件夹名长度:
+lodsb
+cmp al,0
+jz 得到文件或文件夹名长度
+
+cmp al,'/'
+jnz 计算文件或文件夹名长度
+
+得到文件或文件夹名长度:
+dec si;lodsb指令已经把结束符也算进去了所以你需要减1
+sub si,[esp+1];结束位置减去起始位置得到长度
+mov [esp+3],si;第2项文件名长度
+xchg cx,si
+call UTF8字符串内的小写字母转成大写
+cmp word[esp+3],8
 jbe 不需要短文件名;小于等于则跳转
 
+;将会修改al，bh，cx，dl，si，di寄存器
 mov di,缓存区_2
 mov cx,9
 cld;正序
@@ -309,16 +323,16 @@ mov [esp+0],bh;第1项文件名长度
 不需要短文件名:
 call 获取光标位置
 mov [esp+5],dx;刷新 光标位置
-mov ax,bp
-mov bx,[u16_1]
-mov cl,[u8_1]
+mov eax,ebp
+mov cx,[u16_1]
+mov dl,bl;属性
 
 继续对比:
 call iSO9660获取一个项
 jc 项已完结
 
-mov [u32_1],eax;逻辑扇区号
-mov ebp,ecx;iSO9660数据长度
+mov [u32_1],eax;iSO9660数据长度
+mov ebp,ecx;逻辑扇区号
 mov dx,[esp+5];光标位置
 movzx cx,byte[esp+7];上1项字符长度
 call 重置光标并清除前文件名
@@ -340,9 +354,9 @@ jz 项名相同
 cmp dx,[esp+3];第2项文件名长度
 jnz 继续对比;文件名不一样长就不用对比了
 
-mov cx,dx;字符长度
 mov si,bx;字符地址
-call UTF16字符串内的小写字母转成大写
+mov cx,dx;字符长度
+call UTF8字符串内的小写字母转成大写
 mov cx,dx;字符串长度
 mov si,[esp+1];第2项文件名位置
 mov di,bx;字符地址
@@ -351,8 +365,8 @@ jnz 继续对比
 
 项名相同:
 and byte[标志],11111110b;触发重置
-mov eax,ebp;逻辑扇区号
-mov ebx,[u32_1];iSO9660数据长度
+mov ecx,ebp;逻辑扇区号
+mov eax,[u32_1];iSO9660数据长度
 add sp,8
 clc
 ret
@@ -367,8 +381,6 @@ ret
 
 
 
-
-
 ;将会修改EAX，EBX，CX，DX，Si，Di寄存器
 ;输入EAX数据长度，ECX逻辑扇区号，DL属性，Si文件名位置
 ;输出EAX数据长度，ECX逻辑扇区号
@@ -379,7 +391,6 @@ sub sp,4
 mov byte[esp+3],1;上1项字符长度 应该是0但使用此值会导致某些BiOS清空全屏，所以使用1来解决
 mov [u32_1],eax
 mov ebp,ecx
-mov bl,dl
 mov di,缓存区_2;文件或文件夹名位置
 call UTF8字符串转UTF16字符串
 sub di,缓存区_2
@@ -393,7 +404,6 @@ call 获取光标位置
 mov [esp+1],dx;光标位置
 mov eax,[u32_1]
 mov ecx,ebp
-mov dl,bl
 
 对比下一个项_1:
 call Joliet获取一个项
@@ -504,91 +514,113 @@ ret
 
 
 ;将会修改EAX，EBX，ECX，DX，Si，Di寄存器
-;输入EAX数据长度，ECX逻辑扇区号，BL第一次需要属性
+;输入EAX数据长度，ECX逻辑扇区号，DL第一次需要属性
 ;输出EAX数据长度，ECX逻辑扇区号，BL字符长度，Di字符地址
 ;错误则设置进位
 iSO9660获取一个项:
-test byte[标志],1b;被测试位=0则ZF=1
-jnz 不要重置_1
+call Joliet获取一个项
+jc 已读完所有扇区_2
 
-or byte[标志],1b;取消下次重置
-mov [文件属性号],bl
-mov [逻辑扇区号],ecx
-mov edx,0;清空除法高位
-movzx ecx,word[扇区大小]
-div ecx;edx高：eax低÷ecx=eax…edx
-cmp dx,0
-jz 不增加一个扇区_1
-
-inc ax;超出一个字节都需要读完整个扇区
-
-不增加一个扇区_1:
-mov [循环次数],ax
-mov eax,[逻辑扇区号]
-mov bx,缓存区_1
-call 读盘
-inc dword[逻辑扇区号];预先推到下一个扇区
-mov bx,缓存区_1
-movzx ax,byte[缓存区_1];跳过一个.目录
-add bx,ax
-mov al,[bx];跳过一个..目录
-add bx,ax
-mov [扇区内数据位置],bx
-jmp 不要读盘;第一次则直接读取项
-
-不要重置_1:
-mov bx,[扇区内数据位置]
-mov dx,0;不允许推进
-
-属性不同:
-add bx,dx;推进到下一个项
-mov ax,[扇区大小]
-add ax,bx
-cmp bx,ax
-jb 不要读盘;小于则跳转
-
-触底:
-dec word[循环次数]
-jz 扇区读完
-
-mov eax,[逻辑扇区号]
-mov bx,缓存区_1
-call 读盘
-inc dword[逻辑扇区号];预先推到下一个扇区
-
-不要读盘:
-movzx dx,byte[bx];取这个项的长度
-cmp dl,0
-jz 触底;遇到空项
-
-mov di,iSO9660属性表
-mov al,[bx+25];取属性
-call 对比文件属性
-jnz 属性不同
-
-mov eax,[bx+2];2双端格式的范围地址 (LBA)，2~8÷2
-mov ecx,[bx+10];双端格式的数据长度（范围大小）
-lea di,[bx+33];文件名
-add dx,bx
-mov [扇区内数据位置],dx;推进到下一个项
-movzx bx,byte[bx+32];文件名长度
 cmp byte[文件属性号],1;属性为文件夹则不需要减2
-jz 已省略iSO9660版本号
+jz 没有结束符_1
 
-cmp word[bx+di-2],';1'
-jnz 已省略iSO9660版本号
+mov bh,0
+cmp word[di+bx-2],';1';有时候文件名结尾会带个版本号
+jnz 没有结束符_1
 
 dec bl;文件名长度-2
 dec bl
 
-已省略iSO9660版本号:
+没有结束符_1:
 clc
 ret
 
-扇区读完:
-and byte[标志],11111110b
+已读完所有扇区_2:
 stc
 ret
+
+
+; test byte[标志],1b;被测试位=0则ZF=1
+; jnz 不要重置_1
+
+; or byte[标志],1b;取消下次重置
+; mov [文件属性号],dl
+; mov [逻辑扇区号],ebx
+; mov edx,0;清空除法高位
+; movzx ecx,word[扇区大小]
+; div ecx;edx高：eax低÷ecx=eax…edx
+; cmp dx,0
+; jz 不增加一个扇区_1
+
+; inc ax;超出一个字节都需要读完整个扇区
+
+; 不增加一个扇区_1:
+; mov [循环次数],ax
+; mov eax,[逻辑扇区号]
+; mov bx,缓存区_1
+; call 读盘
+; inc dword[逻辑扇区号];预先推到下一个扇区
+; mov bx,缓存区_1
+; movzx ax,byte[缓存区_1];跳过一个.目录
+; add bx,ax
+; mov al,[bx];跳过一个..目录
+; add bx,ax
+; mov [扇区内数据位置],bx
+; jmp 不要读盘;第一次则直接读取项
+
+; 不要重置_1:
+; mov bx,[扇区内数据位置]
+; mov dx,0;不允许推进
+
+; 属性不同:
+; add bx,dx;推进到下一个项
+; mov ax,[扇区大小]
+; add ax,bx
+; cmp bx,ax
+; jb 不要读盘;小于则跳转
+
+; 触底:
+; dec word[循环次数]
+; jz 扇区读完
+
+; mov eax,[逻辑扇区号]
+; mov bx,缓存区_1
+; call 读盘
+; inc dword[逻辑扇区号];预先推到下一个扇区
+
+; 不要读盘:
+; movzx dx,byte[bx];取这个项的长度
+; cmp dl,0
+; jz 触底;遇到空项
+
+; mov di,iSO9660属性表
+; mov al,[bx+25];取属性
+; call 对比文件属性
+; jnz 属性不同
+
+; mov eax,[bx+2];2双端格式的范围地址 (LBA)，2~8÷2
+; mov ecx,[bx+10];双端格式的数据长度（范围大小）
+; lea di,[bx+33];文件名
+; add dx,bx
+; mov [扇区内数据位置],dx;推进到下一个项
+; movzx bx,byte[bx+32];文件名长度
+; cmp byte[文件属性号],1;属性为文件夹则不需要减2
+; jz 已省略iSO9660版本号
+
+; cmp word[bx+di-2],';1'
+; jnz 已省略iSO9660版本号
+
+; dec bl;文件名长度-2
+; dec bl
+
+; 已省略iSO9660版本号:
+; clc
+; ret
+
+; 扇区读完:
+; and byte[标志],11111110b
+; stc
+; ret
 
 属性表:
 iSO9660属性表:;
@@ -612,7 +644,7 @@ db 2;属性
 
 
 ;将会修改EAX，EBX，ECX，DX，Si，Di寄存器
-;输入EAX数据长度，ECX逻辑扇区号，DL第一次需要属性
+;输入EAX数据长度，ECX逻辑扇区号，dL第一次需要属性
 ;输出EAX数据长度，ECX逻辑扇区号，BL字符长度，Di字符地址
 ;test指令示例test al,0000_0100b;被测试位 =0则ZF =1
 Joliet获取一个项:
@@ -677,6 +709,11 @@ add si,bx;推进到下一个项以便下次操作
 mov [扇区内数据位置],si
 mov ecx,[bx+2];逻辑扇区号
 mov eax,[bx+10];数据长度
+
+
+
+
+
 ;movzx ax,byte[bx+32];判断结束符
 ;lea si,[bx+33]
 ;movzx cx,[bx+0]
@@ -792,7 +829,45 @@ ret
 
 
 
+;将会修改CX，Si寄存器
+;DS：Si字符地址
+;输出
+UTF16字符串内的小写字母转成大写:;
+ lodsw
+ xchg ah,al;大小端转换
+ cmp ax,'a'
+ jb 不要转换_1;小于则跳转
 
+ cmp al,'z'
+ ja 不要转换_1;大于则跳转
+
+ ;and byte[si-1],1101_1111b;转换为大写，原本就是则不变
+ sub byte[si-1],32;lodsw把Si+2但我们只减1是因为大小端的原因
+
+ 不要转换_1:
+loop UTF16字符串内的小写字母转成大写
+
+ret
+
+
+
+UTF8字符串内的小写字母转成大写:;
+ lodsb
+ test al,1000_0000b
+ jnz 不要转换_2
+
+ cmp al,'a'
+ jb 不要转换_2;小于则跳转
+
+ cmp al,'z'
+ ja 不要转换_2;大于则跳转
+
+ sub byte[si-1],32;
+
+ 不要转换_2:
+loop UTF8字符串内的小写字母转成大写
+
+ret
 
 
 
@@ -816,26 +891,21 @@ ret
 
 
 
-
-
-
-
 ;将会修改EAX，BX，CX，DL，Si，EDi，BP寄存器
-;输入EAX数据长度，EBX逻辑扇区号，ECX读到的位置
+;输入EAX数据长度，ECX逻辑扇区号，EBX读到的位置
 ;输出
 iSO9660读入扇区:
-mov edi,ebx
+mov edi,ecx;逻辑扇区号
 mov edx,0;清空除法高位
-movzx ebx,word[扇区大小]
-div ebx;edx高：eax低÷ebx=eax…edx
+movzx ecx,word[扇区大小]
+div ecx;edx高：eax低÷ebx=eax…edx
 cmp dx,0
 jz 不增加一个扇区_2
 
 inc ax;超出一个字节都需要读完整个扇区
 
 不增加一个扇区_2:
-mov ebx,ecx
-mov cx,ax
+mov cx,ax;循环次数
 mov bp,[扇区大小]
 
 继续读入:
@@ -845,7 +915,6 @@ mov bp,[扇区大小]
  add bx,bp;增加一个扇区大小的偏移
 loop 继续读入
 ret
-
 
 
 
@@ -907,28 +976,6 @@ ret
 mov si,光盘读取错误
 jmp 打印并退出
 光盘读取错误 db 13,10,'Disc read error',0
-
-
-
-;将会修改CX，Si寄存器
-;DS：Si字符地址
-;输出
-UTF16字符串内的小写字母转成大写:;
- lodsw
- xchg ah,al;大小端转换
- cmp ax,'a'
- jb 不要转换_1;小于则跳转
-
- cmp al,'z'
- ja 不要转换_1;大于则跳转
-
- ;and byte[si-1],1101_1111b;转换为大写，原本就是则不变
- sub byte[si-1],32;Si只减1是因为大小端的原因
-
- 不要转换_1:
-loop UTF16字符串内的小写字母转成大写
-
-ret
 
 
 
