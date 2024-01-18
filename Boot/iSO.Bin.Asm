@@ -13,6 +13,12 @@
 ;6月22日
 ;支持iSO9660的变体Joliet\
 @cya
+
+;2024年1月
+;不传入LBA的高32位
+;VMware会忽略传入LBA的高32位
+;Oracle VM VirtualBox会显示FATAL: int13_cdrom: function 42. Can't use 64bits lba\
+@ychen
 ;----------------------------------------------------------------------------
 
 ;内存布局
@@ -690,7 +696,6 @@ jz 已读完所有扇区_1
 
 mov ebx,缓存区_1
 mov eax,[逻辑扇区号]
-mov edx,0;逻辑扇区号高位
 call 读盘
 inc dword[逻辑扇区号]
 dec word[循环次数]
@@ -951,10 +956,10 @@ ret
 ;输出BX：0目标位置
 
 ;将会修改AH，DL，Si寄存器
-;输入EAX=LBA低32位，EDX=LBA高32位，EBX=高32位段地址+低32位偏移地址
+;输入EAX=LBA低32位，EBX=高32位段地址+低32位偏移地址
 ;输出
 读盘:
-push edx;[12]LBA高32位
+push dword 0;[12]LBA高32位
 push eax;[8]LBA低32位
 ;word[6]段地址
 push ebx;[4]偏移地址
