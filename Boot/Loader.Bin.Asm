@@ -11,22 +11,22 @@
 
 ;内存布局
 DOS段地址 equ 60000h;～DOS结束=Loader.Bin
-栈 equ 0FFFFh;60000：FFFF
 缓存区_1 equ 数据结束;～6FFFF
 缓存区_2 equ 缓存区_1+2048
+栈 equ 0FFFFh;60000：FFFF
 缓存区_3 equ 70000h;～7FFFF
 
 
-mov [u8_1],ah
-mov [u16_1],cx
-mov [u16_2],si
-mov [u16_3],di
+push ax
+push cx
+push si
+push di
 call 自定位
 
 自定位:
 pop si
 sub si,自定位
-mov [u16_4],si
+push si;再次压栈，基地址
 add si,DOS起始
 mov di,cs;DS=CS
 mov ds,di
@@ -35,50 +35,56 @@ mov es,di
 mov di,0
 mov fs,di;DS，ES段寄存器已被占用
 mov cx,DOS结束-DOS起始
-mov [u8_2],cl
-shr cx,2;除以4，以便最高效复制
+push cx
+shr cx,2;÷4，以便最高效复制
 rep movsd;如果CX为0则什么都不操作
-movzx cx,byte[u8_2]
+pop cx
 and cl,11b;只保留低二位
 rep movsb;如果CX为0则什么都不操作
 
-mov cx,DOS段地址/10h
-mov fs:[2],cx;现在写入我们的中断程序
-mov si,int0-DOS起始
-mov fs:[0],si
+mov cx,DOS段地址/10h;现在写入我们的中断程序
+mov fs:[2],cx;段地址
+mov word fs:[0],int0-DOS起始;偏移地址
 
-mov fs:[6],cx;段地址
-mov si,int_1-DOS起始
-mov fs:[4],si;偏移地址
+mov fs:[2+4],cx
+mov word fs:[4*1h],int_1-DOS起始
 
-mov fs:[26],cx;!24+2=26
-mov si,int6-DOS起始
-mov fs:[24],si;6×4=24!
+;int2
 
-mov fs:[50],cx
-mov si,intC-DOS起始
-mov fs:[48],si
+;int3
 
-mov fs:[54],cx
-mov si,intD-DOS起始
-mov fs:[52],si
+mov fs:[2+24],cx
+mov word fs:[4*6h],int6-DOS起始
 
-mov fs:[86h],cx
-mov si,int21-DOS起始
-mov fs:[84h],si
+;mov fs:[2+32],cx
+;mov word fs:[4*8h],int8-DOS起始
+
+mov fs:[2+48],cx
+mov word fs:[4*0ch],intC-DOS起始
+
+mov fs:[2+52],cx
+mov word fs:[4*0dh],intD-DOS起始
+
+mov fs:[2+84h],cx
+mov word fs:[4*21h],int21-DOS起始
 
 cmp bp,0AA55h;由我们的引导扇区过传来的判断数
 jnz 无法确定文件系统类型
+
+pop bp;基地址
+
+mov ax,2401h;启用A20门
+int 15h
+jc $
 
 mov ah,2;修改文件系统类型号
 int 21h
 jc 无法确定文件系统类型;文件系统类型号过大
 
-mov ah,[u8_1]
-mov cx,[u16_1]
-mov si,[u16_2]
-mov di,[u16_3]
-mov bp,[u16_4];基地址
+pop di
+pop si
+pop cx
+pop ax
 movzx esp,sp;清空高位
 mov es:[驱动器号],dl
 movzx dx,dh;把高位传到低位并清空高位
@@ -131,64 +137,16 @@ push si;+0
 mov si,换行
 add si,bp
 call 打印
-mov si,OSHALINITIALIZE
+mov si,OSHALKERINIT
 add si,bp;加基地址
+mov ebx,100000h
 mov ah,9
-;jmp $
 int 21h
+jmp 0FFFFh:10h
 
 
 
-call 打开文件夹_1
-;mov si,
-add si,bp;加基地址
-call 读入其中一个存在的文件
-jnc 读入文件
 
-call 打印None和原字符
-mov si,换行
-add si,bp
-call 打印
-mov eax,[esp+2]
-mov ecx,[esp+6]
-mov bx,5;重新设置为根目录
-int 21h
-mov si,BOOT
-add si,bp;加基地址
-mov al,1;需要文件夹
-mov cx,4;文件夹名长度
-mov bx,9;获取一个文件或文件夹
-int 21h
-jc 没有文件夹
-
-call 打印斜杠
-mov si,COMMAND
-add si,bp;加基地址
-mov al,0;文件
-mov cx,11;文件名长度
-mov bx,9;获取一个文件或文件夹
-int 21h
-jc 没有找到
-
-读入文件:
-mov ecx,2000_0000h
-mov ax,[esp+0]
-sub cx,ax;减应对推
-
-继续读入:
-add cx,ax
-mov bx,7
-int 21h
-jnc 继续读入
-
-pop si
-pop dx
-pop ecx
-pop eax
-mov bx,5;设置为根
-int 21h
-movzx bx,dh
-jmp 2000h:0h;进入命令处理程序
 
 
 
@@ -381,7 +339,7 @@ ud2
 call 显示寄存器
 jmp $
 
-
+nop
 
 ;单个 CPU 一次只能执行一条指令。单处理器中的多任务处理通常是每个运行进程的不同寄存器/分页之间的快速切换（在软件级别），并且速度如此之快以至于看起来进程同时运行。
 
@@ -478,7 +436,7 @@ jmp 7000h:0h;进入命令处理程序
 换行 db 13,10,0
 None db 'None ',0
 
-OSHALINITIALIZE db 'OPERATING SYSTEM/HARDWARE ABSTRACTION LAYER/INITIALIZE.BIN',0
+OSHALKERINIT db 'OPERATING SYSTEM/HARDWARE ABSTRACTION LAYER/KERNELINITIALIZE.BIN',0
 
 OSHAL db 'OPERATING SYSTEM/HARDWARE ABSTRACTION LAYER/',0
 INITIALIZE db 'INITIALIZE.BIN|',0
@@ -503,8 +461,8 @@ or byte cs:[标志],10b;标记为在内部调用
 jmp 不设置栈_1
 
 不是在内部调用_1:
-mov cs:[栈-2],ss;保原存栈
 mov cs:[栈-4],sp
+mov cs:[栈-2],ss;保原存栈
 mov sp,DOS段地址/16;设置新栈
 mov ss,sp
 mov esp,栈-6;顺便清空高位
@@ -513,22 +471,21 @@ mov esp,栈-6;顺便清空高位
 cmp ah,功能号大小/2;垃圾NASM编译器不支持动态数值的除法
 ja 功能号过大;大于则跳转
 
-mov cs:[u16_1],bx
+push bx
 movzx bx,ah
 shl bx,1;×2
 mov bx,cs:[bx+功能表起始-DOS起始]
 cmp bx,寻址表结束-DOS起始;地址已经不在表内所以不需要再次定位
-JAE 不区分文件系统;等于大于则跳转
+JAE 不区分文件系统;大于等于则跳转
 
-mov cs:[u16_2],si
+push si
 movzx si,byte cs:[文件系统类型号]
 shl si,1;×2
 mov bx,cs:[bx+si];BX是基地址，Si是表内偏移
-mov si,cs:[u16_2]
+pop si
 
 不区分文件系统:
-push bx
-mov bx,cs:[u16_1]
+xchg [esp],bx
 ret;跳转至CS：BX
 
 
@@ -551,8 +508,7 @@ and byte cs:[标志],1111_1101b;下次返回时可能就要还原栈了，所以
 jmp 不设置栈_2;现在还不用还原栈
 
 不是在内部调用_2:
-mov sp,cs:[栈-4];还原栈
-mov ss,cs:[栈-2]
+lss sp,cs:[栈-4];还原栈
 
 不设置栈_2:;设置栈内CF标志位，注意压栈顺序
 test byte cs:[标志],100b;被测试位 =0则ZF =1
@@ -674,26 +630,25 @@ ret
 
 
 
-;将会修改EAX，EBX，DX，Si，Di寄存器
-;输入AL需要输入一次文件属性号
+;将会修改EAX，EBX，ECX，EDX，Si，Di寄存器
+;需要输入1次EAX扇区数据长度，需要输入1次EBX=LBA，需要输入1次CL文件属性号
 ;输出EAX=LBA，ECX扇区数据长度，DX文件名长度，ES：Di文件名
 iSO9660获取一个项:
-mov bx,DOS段地址/10h
-mov ds,bx;段地址，int13ah42的DS：Si，磁盘参数块需要
-mov bx,缓存区_3/10h
-mov es,bx;返回值
+mov si,DOS段地址/10h
+mov ds,si;段地址，int13ah42的DS：Si，磁盘参数块需要
+mov si,缓存区_3/10h
+mov es,si;返回值
 test byte[标志],1b;被测试位 =0则ZF =1
 jnz 不要重置
 
-cmp al,2
+cmp cl,2
 ja 属性错误;大于则跳转
 
-mov [文件属性号],al
+mov [文件属性号],cl
 or byte[标志],1b;取消下次重置
-mov eax,[当前目录簇号]
-mov [逻辑扇区号],eax
+mov [逻辑扇区号],ebx
 
-mov eax,[t_u32_2];iSO9660目录长度
+;iSO9660目录长度
 mov edx,0;清空除法高位
 movzx ebx,word[扇区大小]
 div ebx;edx高：eax低÷ebx =eax…edx
@@ -722,8 +677,8 @@ dec word[t_u8_1]
 mov eax,[逻辑扇区号]
 inc dword[逻辑扇区号];推进到下一个扇区
 mov edx,0;LBA高位
-mov ebx,缓存区_3/10h*10000h;段地址，左移16位
-mov bx,0;偏移地址，在此处放置扇区
+mov ebx,缓存区_3
+mov cx,1
 call 读盘
 add bx,es:[bx];跳过一个.目录
 add bx,es:[bx];跳过一个..目录
@@ -1295,7 +1250,7 @@ ret
 ;（簇号-2）×每个簇占用的扇区数+数据区起始扇区号=簇的LBA号
 簇号转逻辑扇区号:
 cmp eax,0FFF_FFF8h;如果链表结束
-jae 链表末端;等于大于则跳转，这是簇链的结束标志
+jae 链表末端;大于等于则跳转，这是簇链的结束标志
 
 dec eax
 dec eax
@@ -1480,12 +1435,12 @@ jmp $
 ;输入DS：Si=UTF8字符串的文件名位置，EBX文件缓存区 如果只是打开路径或文件夹则不需要
 ;输出DS：Si未找到的文件名
 iSO9660打开_1个文件或路径:
-sub sp,32
+sub sp,40
 ;备份寄存器
 mov [esp+0],ds;数据段_1
 mov [esp+2],es
 mov [esp+4],eax
-mov [esp+8],ebx
+mov [esp+8],ebx;文件缓存区_1
 mov [esp+12],ecx
 mov [esp+16],dx
 mov [esp+18],si;这次的UTF8字符串类型的文件名位置_1
@@ -1496,13 +1451,17 @@ mov byte[esp+24],1;+24 上1串字符长度_1 应该是0但使用此值会导致�
 ;mov word[esp+27],;第1项文件名长度_1
 mov word[esp+29],si;下次的UTF8字符串类型的文件名位置_1
 mov [esp+31],al
-;+16=项名长度，+18=iSO9660数据长度，+22=LBA
+mov eax,cs:[当前目录簇号]
+mov [esp+32],eax
+mov eax,cs:[t_u32_2];iSO9660目录长度
+mov [esp+36],eax
+;多余的暂时存放;+16=项名长度，+18=iSO9660数据长度，+22=LBA
 
 
 下_1个文件夹_1:
 mov si,[esp+29];下次的UTF8字符串类型的文件名位置_1
 cmp byte[si],0
-jz 退位返回;路径已结束
+jz 路径已结束_1
 
 mov [esp+18],si;这次的UTF8字符串类型的文件名位置_1
 mov cx,0FFFFh;扫描长度
@@ -1526,10 +1485,12 @@ jmp 进位返回
 
 需要读入文件_1:
 or byte cs:[标志],1000b;置1这个位
-
-;and byte cs:[标志],1111_0111b;置0这个位
+jmp 不能覆盖需要读入文件的标志
 
 只要文件夹_1:
+and byte cs:[标志],1111_0111b;置0这个位
+
+不能覆盖需要读入文件的标志:
 mov [esp+29],si;下次的UTF8字符串类型的文件名位置_1
 dec si;此时Si已指向结束符我们不要把结束符也算进去
 ;结束位置-起始位置=过程长度
@@ -1607,10 +1568,14 @@ rep movsb
 call 获取光标位置
 mov [esp+25],dx;更新 光标位置_1
 test byte cs:[标志],1000b
-mov al,1
-jz 继续查找项_1;只要文件夹_2
+mov cl,1
+jz 只要文件夹_2
 
-mov al,0
+mov cl,0
+
+只要文件夹_2:
+mov ebx,[esp+32];LBA
+mov eax,[esp+36];iSO9660目录长度
 
 继续查找项_1:
 call iSO9660获取一个项
@@ -1644,8 +1609,10 @@ jz 项名匹配
 cmp dx,[esp+27];第1项文件名长度_1
 jnz 继续查找项_1;错误的文件名长度
 mov cx,dx;项名长度
-mov di,bx;项名位置
-call 转成大写_1
+mov si,es
+mov ds,si
+mov si,bx;项名位置
+call 指定长度的UTF8字符串内的小写字母转换为大写字母
 mov di,bx;项名位置
 mov ds,[esp+0];数据段_1
 mov si,[esp+18];这次的UTF8字符串类型的文件名位置_1
@@ -1653,14 +1620,18 @@ mov cx,dx;项名长度
 repe cmpsb
 jnz 继续查找项_1
 
+mov si,cs;上面修改了数据段
+mov ds,si
+
 项名匹配:
-mov ecx,[u32_1];LBA
-mov ebx,[u32_2];iSO9660数据长度
-mov ah,5
-int 21h
-test byte cs:[标志],1000b
+test byte[标志],1000b
 jnz 需要读入文件_2
 
+mov ebx,[u32_1];LBA
+mov eax,[u32_2];iSO9660数据长度
+mov [esp+32],ebx;LBA
+mov [esp+36],eax;iSO9660目录长度
+and byte cs:[标志],1111_1110b;要重新获取项喔
 mov ds,[esp+0];数据段_1
 mov bx,[esp+29];下次的UTF8字符串类型的文件名位置_1
 mov al,[bx-1];显示分隔符
@@ -1670,26 +1641,85 @@ int 10h
 jmp 下_1个文件夹_1
 
 需要读入文件_2:
-jmp $
+push dword[esp+8];8+文件缓存区_1
+push dword[u32_1];+4=LBA
+push dword[u32_2];+0=iSO9660数据长度
+mov ax,0FFFFh
+mov dx,0;清空除法高位
+div word[扇区大小];dx高：ax低÷[内存单元] =ax…dx
+movzx ebp,ax
 
+
+读入文件扇区_1:
+sub dword[esp+0],0FFFFh
+jc 不能读那么多扇区了_1;不够0FFFFh时会触发进位
+
+mov ebx,缓存区_3
+mov eax,[esp+4]
+mov edx,0;LBA高位
+mov cx,bp
+call 读盘
+add [esp+4],ebp
+mov esi,ebx
+mov edi,[esp+8]
+mov ecx,0FFFFh
+call 复制此处内存里的数据到内存的别处
+add dword[esp+8],0FFFFh
+jmp 读入文件扇区_1
+
+
+不能读那么多扇区了_1:
+mov ax,[esp+0];已经不够0FFFFh了我们要低位就行
+add ax,0FFFFh
+jz 刚好读完_1
+
+mov dx,0;清空除法高位
+mov di,ax
+mov bp,[扇区大小]
+div bp;dx高：ax低÷bp =ax…dx
+dec bp
+not bp;按位取反
+and di,bp
+cmp dx,0
+jz 没有超出_4;超出一个字节都需要读完整个扇区
+
+inc ax
+not bp;按位取反
+inc bp
+add di,bp
+
+没有超出_4:
+mov ebx,缓存区_3
+mov cx,ax
+mov eax,[esp+4]
+mov edx,0;LBA高位
+call 读盘
+mov esi,ebx
+movzx ecx,di
+mov edi,[esp+8]
 call 复制此处内存里的数据到内存的别处
 
+刚好读完_1:
+and byte cs:[标志],1111_1110b;我们获取过文件项别忘了这个
+add sp,12
+jmp 不允许修改路径_1
 
+路径已结束_1:;如果你没有输入文件夹名或或者没有找到文件夹则不会改变任何参数
+mov ebx,[esp+32];LBA
+mov eax,[esp+36];iSO9660目录长度
+mov cs:[当前目录簇号],ebx;LBA
+mov cs:[t_u32_2],eax;iSO9660目录长度
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+不允许修改路径_1:
+mov ds,[esp+0];数据段_1
+mov es,[esp+2]
+mov eax,[esp+4]
+mov ebx,[esp+8];文件缓存区_1
+mov ecx,[esp+12]
+mov dx,[esp+16]
+mov si,[esp+18];这次的UTF8字符串类型的文件名位置_1
+mov di,[esp+20]
+jmp 退位返回
 
 
 没有匹配项_1:
@@ -1702,24 +1732,7 @@ jmp 进位返回
 
 
 
-复制用的全局描述符表:
-dq 0;空描述符
-dq 0;由BiOS使用的？
 
-要复制的字节 dw 0
-db 0
-
-db 93h;固定的段属性
-
-
-
-复制到的字节 dw 0
-db 0
-
-db 93h;固定的段属性
-
-dq 0;由BiOS使用的保护模式代码段描述符
-dq 0;由BiOS使用的保护模式栈段描述符
 
 ;输入
 ;AL =属性
@@ -1759,7 +1772,7 @@ jnz 继续查找项;错误的文件名长度
 
 mov bx,di;Save名
 mov cx,dx;长
-call 转成大写_1
+call 指定长度的UTF8字符串内的小写字母转换为大写字母
 mov di,bx;原，文件名
 mov cx,dx;长
 mov ds,[esp+2];段	
@@ -1826,61 +1839,6 @@ mov bh,0;页码
 loop 显示路径_1
 
 ret
-
-
-
-;AL，CX，Di寄存器将会被修改
-;输入
-;CX =字符长度
-;ES：Di =字符位置
-;输出
-转成大写_1:
- mov al,es:[di];取
- cmp al,'A'
- jb 不要;小于则跳转
-
- cmp al,'z'
- ja 不要;大于则跳转
-
- cmp al,'[';在大写和小写之间隔了几个字符，我们需要额外处理
- jb 要;小于则跳转
-
- cmp al,'a'
- jb 不要;小于则跳转
-
- 要 and byte es:[di],1101_1111b;转换为大写，原本就是则不变
-
- 不要 inc di;推
-loop 转成大写_1
-ret
-
-
-;将会修改AL，CX，Di寄存器
-;输入
-;CX =字符长度
-;ES：Di =字符位置
-;输出
-带结束符的UTF16小写字母转换为大写字母:
-mov di,si
-jmp 插入_1
-
-还未转换结束_1:
- cmp ax,'a'
- jb 直接写入_1;小于则跳转 不是小写字母
-
- cmp ax,'z'
- ja 直接写入_1;大于则跳转 不是小写字母
-
-; 转换为小写字母_1:
- sub eax,32;注意 为什么是eax而不是ax
-
- 直接写入_1:
- stosw
-
- 插入_1:
- lodsw
-loop 还未转换结束_1
-
 
 
 
@@ -2125,18 +2083,117 @@ ret
 
 
 
+;将会修改CX，Si寄存器
+;DS：Si字符地址
+;输出
+UTF16字符串内的小写字母转成大写:;
+ lodsw
+ xchg ah,al;大小端转换
+ cmp ax,'a'
+ jb 不要转换_1;小于则跳转
+
+ cmp al,'z'
+ ja 不要转换_1;大于则跳转
+
+ ;and byte[si-1],1101_1111b;转换为大写，原本就是则不变
+ sub byte[si-1],32;lodsw把Si+2但我们只减1是因为大小端的原因
+
+ 不要转换_1:
+loop UTF16字符串内的小写字母转成大写
+
+ret
+
+
+
+;将会修改CX，Si寄存器
+;DS：Si字符地址
+;输出
+指定长度的UTF8字符串内的小写字母转换为大写字母:;
+ lodsb
+ test al,1000_0000b
+ jnz 不要转换_2
+
+ cmp al,'a'
+ jb 不要转换_2;小于则跳转
+
+ cmp al,'z'
+ ja 不要转换_2;大于则跳转
+
+ sub byte[si-1],32;
+
+ 不要转换_2:
+loop 指定长度的UTF8字符串内的小写字母转换为大写字母
+
+ret
+
+
+
+;AL，CX，Di寄存器将会被修改
+;输入CX字符长度，ES：Di字符位置
+;输出
+转成大写_1:
+ mov al,es:[di];取
+ cmp al,'A'
+ jb 不要;小于则跳转
+
+ cmp al,'z'
+ ja 不要;大于则跳转
+
+ cmp al,'[';在大写和小写之间隔了几个字符，我们需要额外处理
+ jb 要;小于则跳转
+
+ cmp al,'a'
+ jb 不要;小于则跳转
+
+ 要 and byte es:[di],1101_1111b;转换为大写，原本就是则不变
+
+ 不要 inc di;推
+loop 转成大写_1
+ret
+
+
+
+;将会修改AL，CX，Di寄存器
+;输入
+;CX =字符长度
+;ES：Di =字符位置
+;输出
+带结束符的UTF16小写字母转换为大写字母:
+mov di,si
+jmp 插入_1
+
+还未转换结束_1:
+ cmp ax,'a'
+ jb 直接写入_1;小于则跳转 不是小写字母
+
+ cmp ax,'z'
+ ja 直接写入_1;大于则跳转 不是小写字母
+
+; 转换为小写字母_1:
+ sub eax,32;注意 为什么是eax而不是ax
+
+ 直接写入_1:
+ stosw
+
+ 插入_1:
+ lodsw
+loop 还未转换结束_1
+
+
+
 ;将会修改AH，DL，Si寄存器
-;输入EAX=LBA低32位，EDX=LBA高32位，EBX=高32位段地址+低32位偏移地址
+;输入EAX=LBA低32位，EDX=LBA高32位，EBX高32位段地址+低32位偏移地址，CX要读取的块数
 ;输出
 读盘:
 push edx;[12]LBA高32位
 push eax;[8]LBA低32位
 ;word[6]段地址
 push ebx;[4]偏移地址
-;byte[3]保留，必须为0，注意栈最小压Word
-push byte 1;[2]要传输的扇区数0~127
-;byte[1]保留，必须为0，CX的高位就是这里的值应当清空CH寄存器，注意栈最小压Word
-push byte 16;[0]参数块大小
+shl word[esp+2],12;×1000h
+;byte[3]保留，必须为0，CX的高位就是这里的值应当清空CH寄存器，注意栈最小压Word
+push cx;[2]要传输的扇区数0~127
+;byte[1]保留，必须为0，这是参数块的高位，注意栈最小压Word
+push byte 16;[0]参数块大小，注意栈最小压Word
 
 mov ah,42h;调用号
 mov dl,[驱动器号]
@@ -2173,14 +2230,18 @@ ret
 
 
 
-
+;将会修改AX，BH，Si寄存器
+;DS：Si带结束符的字符串位置
+;输出
+打印:
+mov ah,14;功能号
+mov bh,0;页码
+jmp 插入_3
 
 继续打印:;每个指令都很重要确保他们被正确执行
- mov bh,0;页码
- mov ah,14;功能号
  int 10h;中断号
 
- 打印:
+ 插入_3:
  lodsb;将DS：Si指向的内容放入AL然后Si+1
  cmp al,0
 jnz 继续打印
@@ -2189,41 +2250,78 @@ ret
 
 
 
-
-;将会修改ECX，ESi，EDi寄存器
+;将会修改ECX，DX，EDi，Si寄存器
 ;输入ECX数据字节长度，ESi数据，EDi要复制到的位置
 ;输出
 复制此处内存里的数据到内存的别处:
+mov dx,8
+call 设置段寄存器的隐藏部分
+mov ax,0
+mov ds,ax
+mov es,ax
+mov al,cl
+shr ecx,2;÷4，以便最高效复制
+rep
+db 67h;32位寻址
+db 66h;32位操作数，+movsw=movsd
+movsw
+mov cl,al
+and cl,11b;只保留低2位
+rep
+db 67h;32位寻址
+movsb;如果CX为0则什么都不操作
+mov dx,16
+call 设置段寄存器的隐藏部分
+mov dx,cs
+mov ds,dx
+sti;开中断
+ret
 
 
 
+;将会修改EAX，BX，DS，ES，FS，GS寄存器，iF标志位
+;无输入
+;输出
+设置段寄存器的隐藏部分:
+lgdt cs:[Gdtcfg-DOS起始];读入GDT长度及位置
+mov eax,cr0
+or al,1b
+cli;关中断
+mov cr0,eax
+jmp short ProtectedMode;进入兼容模式
+
+ProtectedMode:;
+mov ds,dx
+mov es,dx
+mov fs,dx
+mov gs,dx
+and al,1111_1110b
+mov cr0,eax
+jmp DOS段地址/16:RealMode-DOS起始;进入实模式
+
+RealMode:;
+;sti;开中断
+ret
 
 
+Gdtcfg:;
+dw GdtEnd-GdtStart-1;长度-1以忽略后1字节
+dd GdtStart-DOS起始+DOS段地址;+基地址
+GdtStart:;
+dq 0h;听说设置个空的段描述符是为了防止从16位实地址模式切换到32位保护模式后忘记设置段寄存器引发的问题。
 
+dw 0FFFFh;段长度
+db 0,0,0;基地址
+db 92h;10010010b;段属性
+db 8Fh;1100_1111b;段属性_段长度1111b
+db 0;基地址00h
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+dw 0FFFFh;段长度
+db 0,0,0;基地址
+db 92h;10010010b;段属性
+db 0;1100_1111b;段属性_段长度1111b
+db 0;基地址00h
+GdtEnd:;
 
 
 
@@ -2271,12 +2369,12 @@ pop ds
 iret
 
 哞 db 'Moo~',0
-; push bx
-; pushf
-; mov bx,sp
-; or word ss:[bx],100h
-; popf
-; pop bx
+;push bx
+;pushf
+;mov bx,sp
+;or word ss:[bx],100h
+;popf
+;pop bx
 
 
 
@@ -2324,7 +2422,7 @@ call 打印
 cld;恢复正序
 
 停:
-;cli;会导致某些虚拟机报错
+ cli;会导致某些虚拟机报错
  hlt
 jmp short 停
 
@@ -2333,7 +2431,19 @@ _cs_ip db '=Pi+61*SC',10,13
 
 
 
+;int8:
+;mov si,DOS段地址/16
+;mov ds,si
+;mov si,双重错误-DOS起始
+;call 打印
+;jmp 停
+
+;双重错误 db 13,10,'Double Fault',0
+
+
+
 ;#SS，栈溢出
+;注意 当SP下溢时不会产生此中断，即SP=1然后执行push指令时处理器将会复位或重启
 intC:
 mov ebx,DOS段地址/16;顺便清空高位
 mov ds,bx
@@ -2379,6 +2489,7 @@ push eax
 push bx
 push esi
 push ds
+jmp 停
 
 
 
@@ -2393,26 +2504,6 @@ push ds
 
 
 
-Gdtcfg:;
-dw GdtEnd-GdtStart-1;长度-1以忽略后一字节 因为计算机是从零开始计数的
-dd GdtStart-DOS起始+DOS段地址;+基地址
-GdtStart:;
-dq 0h;听说设置个空的段描述符是为了防止从16位实地址模式切换到32位保护模式后忘记设置段寄存器引发的问题。
-
-;保护模式
-dw 0FFFFh;段长度
-db 0,0_,DOS段地址/10000h;基地址0,0_0000h
-db 10011010b;段属性
-db 0000_0000b;段属性_段长度0000b
-db 0;基地址00h
-
-;大实模式
-dw 0FFFFh;段长度
-db 0,0,0;基地址
-db 10010010b;段属性
-db 1100_1111b;段属性_段长度1111b
-db 0;基地址00h
-GdtEnd:;
 
 
 
