@@ -1,5 +1,6 @@
 <!DOCTYPE html><!--第五代超文本标记语言-->
 <meta http-equiv="Content-Type" content="text/html;charset=utf-8"><!--使用UTF-8支持全球语言-->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <html>
 
 
@@ -17,10 +18,13 @@
 
 
 
-<script><!--脚本起始↛-->
-function 时元计算()<!--函数-->
+<script>//脚本起始
+document.body.style.zoom="150%";//放大网页
+
+
+function 时元计算()//函数
 {
-var  StartTime=document.getElementById("开始时").value;<!--获取输入框内容-->
+var  StartTime=document.getElementById("开始时").value;//获取输入框内容
 var  EndTime=document.getElementById("结束时").value;
 var fjg = document.getElementById("分间隔");
 var yanmany = document.getElementById("一时元").value;
@@ -65,7 +69,7 @@ if (StartTmh === ""){var StartTmh=24}
 var StartTime=StartTime[1];
 if  (StartTime>59){timeaddmanyout.innerHTML = " ≯ 开始分大于59"
 return;}
-if (StartTime===undefined){var StartTime=0}<!--判断变量是否为未定义-->
+if (StartTime===undefined){var StartTime=0}//判断变量是否为未定义
 var StartTime=StartTime*1
 var StartTime=StartTmh*60+StartTime
 
@@ -76,7 +80,7 @@ if (EndTmh === ""){var EndTmh=24}
 var EndTime=EndTime[1];
 if  (EndTime>59){timeaddmanyout.innerHTML = " ≯ 开始分大于59"
 return;}
-if (EndTime===undefined){var EndTime=0}<!--判断变量是否为未定义-->
+if (EndTime===undefined){var EndTime=0}//判断变量是否为未定义
 var EndTime=EndTime*1
 var EndTime=EndTmh*60+EndTime
 
