@@ -108,13 +108,15 @@ dd 40h + 40000000h + 80000000h;描述节特性的标志。可以读取此节，�
 可移植可执行填充结束:
 
 
-
-;https://uefi.org/specs/UEFI/2.10/02_Overview.html#calling-conventions
+;https://uefi.org/specs/UEFI/2.10/02_Overview.html#x64-platforms
 ;调用约定
+;RCX第一个参数，RDX第二个参数，R8第三个参数，R9第四个参数
+;最后一个参数被最先压入栈，RSP - 24，RSP + 0第五个参数，RSP + 8第六个参数，RSP + 16第七个参数，RSP + 24第八个参数
 ;寄存器Rax，Rcx Rdx R8，R9，R10，R11和XMM0到XMM5是易失性寄存器因此在函数调用时会被修改
 ;寄存器RBX，RBP，RDI，RSI，R12，R13，R14，R15和XMM6到XMM15被视为非易失性寄存器必须由使用它们的函数进行保存和恢复
 ;函数指针是指向相应函数标签的指针不需要特殊处理
 ;调用UEFI函数前必须以16byte字节对齐栈，不对齐就黑屏
+;固定为 64 位的返回值在 Rax 寄存器中返回。如果返回值超出 64 位，则调用者必须分配并传递一个指针作为返回值的第一个参数 Rcx。随后的参数将向右移动一个参数，因此例如参数一将在 Rdx 中传递。要返回的用户定义类型长度必须是 1、2、4、8、16、32 或 64 位。
 
 
 
@@ -272,6 +274,29 @@ EFI表头大小 equ EFI表头_保留 + 4
 
 
 
+;#define EFI_BLOCK_IO_PROTOCOL_GUID \
+ ;{0x964e5b21,0x6459,0x11d2,\
+;  {0x8e,0x39,0x00,0xa0,0xc9,0x69,0x72,0x3b}}
+
+;typedef struct _EFI_BLOCK_IO_PROTOCOL {
+;  UINT64                         Revision;
+;  EFI_BLOCK_IO_MEDIA             *Media;
+;  EFI_BLOCK_RESET                Reset;
+;  EFI_BLOCK_READ                 ReadBlocks;
+;  EFI_BLOCK_WRITE                WriteBlocks;
+;  EFI_BLOCK_FLUSH                FlushBlocks;
+;} EFI _BLOCK_IO_PROTOCOL;
+
+
+
+
+
+
+
+
+
+
+
 
 
 ;将会修改所有寄存器
@@ -281,11 +306,11 @@ EFI表头大小 equ EFI表头_保留 + 4
 bits 64
 ;jmp $
 
-;https://uefi.org/specs/UEFI/2.10/02_Overview.html#handoff-state-2
 ;保存传入参数
+;https://uefi.org/specs/UEFI/2.10/02_Overview.html#handoff-state-2
 sub rsp,8;注意将栈对齐16byte字节，因为UEFI使用call指令进入本函数而非jmp指令，这就导致了虽然UEFI在进入本函数前栈是以16byte字节对齐但因为call会在栈中压入返回地址并将栈减8byte字节而使栈不以16byte字节对齐，应再次将栈减8byte字节以恢复栈的16byte字节对齐
-push rcx
 push rdx
+push rcx
 
 ;提前获取函数指针以加快调用速度和减少代码大小
 ;你可使用IDA按F5进行反编译以查看结构体详情
@@ -307,40 +332,60 @@ mov rsi,[rdx + 引导服务表指针]
 mov rsi,[rsi + 打开协议]
 mov [rel + 打开协议函数指针],rsi
 
+mov rdi,[rdx + 引导服务表指针]
+mov rdi,[rdi + 分配内存页]
+mov [rel + 分配内存页函数指针],rdi
+
+mov r8,[rdx + 引导服务表指针]
+mov r8,[r8 + 获取内存图]
+mov [rel + 获取内存图函数指针],r8
+
+
+
 lea rax,[rel + 可参照IDA函数结构体结束]
 jmp rax
 
 
+
+;https://uefi.org/specs/UEFI/2.10/12_Protocols_Console_Support.html#efi-simple-text-output-protocol-outputstring
+;typedef
+;EFI_STATUS
+;(EFIAPI *EFI_TEXT_STRING) (
+; IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL    *This,
+; IN CHAR16                             *String
+; );
+
+;输入RCX简单文本输出协议表指针，RDX字符串指针
+;输出显示字符串
 可参照IDA函数结构体结束:
-;打印字符串
 mov rcx,rbx
-lea rdx,[rel + 换行]
+lea rdx,[rel + 字符串_间隔]
 call rbp
 
-mov rcx,rbx
-lea rdx,[rel + 测试文本]
-call rbp
+db 0ebh,0feh
+;https://wiki.osdev.org/Reading_sectors_under_UEFI
+mov r9,0;在缓冲区不够大时会返回需要多大的缓冲区，输入零大小以获得需要多大的缓冲区
+lea rdx,[rel + 块设备读写的UUid]
+lea rbx,[rel + 缓冲区起始]
+call 获取指定的句柄表
+mov rcx,8000000000000005h
+cmp rax,rcx
+jnz $
 
-mov rcx,rbx
-lea rdx,[rel + 回车加换行]
-call rbp
+cmp r9,0
+jz $
+
+mov r9,20h
+lea rdx,[rel + 块设备读写的UUid]
+lea rbx,[rel + 缓冲区起始]
+call 获取指定的句柄表
+cmp rax,0
+
+jmp $
 
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-暂停 hlt
-jmp 暂停
 ;稍等一下，以便用户可以看到该字符串
 ;mov rcx,;5000000;一百万微秒等于一秒
 ;call [BOOT_SERVICES_STALL]
@@ -352,6 +397,180 @@ jmp 暂停
 
 
 
+
+
+
+;https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-locatehandle
+;typedef
+;EFI_STATUS
+;(EFIAPI *EFI_LOCATE_HANDLE) (
+;   IN EFI_LOCATE_SEARCH_TYPE                 SearchType，指定要返回哪些句柄。类型 EFI_LOCATE_SEARCH_TYPE 在“相关定义”中定义。
+;   IN EFI_GUID                               *Protocol OPTIONAL，指定要搜索的协议。仅当 SearchType 为ByProtocol时，此参数才有效。类型 EFI_GUID 在EFI_BOOT_SERVICES.InstallProtocolInterface()函数描述中定义 。
+;   IN VOID                                   *SearchKey OPTIONAL，指定搜索关键字。如果 SearchType 为AllHandles或ByProtocol ，则忽略此参数。如果 SearchType 为ByRegisterNotify ，则该参数必须是函数EFI_BOOT_SERVICES.RegisterProtocolNotify()返回的 Registration 值 。
+;   IN OUT UINTN                              *BufferSize，在输入时，以字节为单位的缓冲区大小。在输出时，*Buffer*中返回的数组的字节大小（如果缓冲区足够大）或获取该数组所需的缓冲区的字节大小（如果缓冲区不够大）。
+;   OUT EFI_HANDLE                            *Buffer，返回数组的缓冲区。类型 EFI_HANDLE 在 InstallProtocolInterface() 函数描述中定义。
+;   );
+
+;//******************************************************
+;// EFI_LOCATE_SEARCH_TYPE
+;//******************************************************
+;typedef enum {
+所有句柄数组 equ 0;   AllHandles,
+通过注册通知 equ 所有句柄数组 + 1;   ByRegisterNotify,
+按协议 equ 通过注册通知 + 1;   ByProtocol
+;  } EFI_LOCATE_SEARCH_TYPE;
+
+;输入，RCX 搜索的句柄表类型，RDX全局唯一标识，R8 搜索关键字，R9 句柄表缓冲区大小，RBX 句柄缓冲区起始
+;输出RAX返回值，R9 所需的缓冲区大小，缓存区内句柄数组
+获取指定的句柄表:
+mov rcx,按协议
+mov r8,0;null
+sub rsp,8 * 4 + 8
+mov [rsp + 8 * 3],r9
+lea r9,[rsp + 8 * 3]
+mov [rsp + 8 * 4],rbx
+call [rel + 定位句柄函数指针]
+mov r9,[rsp + 8 * 3];为何uefi不把所需的缓冲区大小直接写入r8寄存器，难道是fastcall约定返回值只能在rax寄存器吗
+add rsp,8 * 4 + 8
+ret
+
+
+;输入
+;输出
+;
+获取指定的句柄表函数返回状态:
+cmp al,7
+ja $
+
+lea rdx,[rel + 获取指定的句柄表函数返回状态的字符串指针表起始]
+movzx eax,al
+add rdx,rax
+jmp 打印并暂停
+
+
+
+
+
+
+
+;https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-allocatepages
+
+
+
+
+
+
+
+
+
+
+
+打印并暂停:
+mov rcx,[rel + 简单文本输出协议表起始]
+call [rel + 输出字符串函数指针] 
+
+
+
+暂停:
+hlt
+jmp 暂停
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+;https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#efi-boot-services-allocatepages
+;typedef
+;EFI_STATUS
+;(EFIAPI *EFI_ALLOCATE_PAGES) (
+;   IN EFI_ALLOCATE_TYPE                   Type，要执行的分配类型。请参阅“Related Definitions”
+;   IN EFI_MEMORY_TYPE                     MemoryType，要分配的内存类型。EFI_MEMORY_TYPE 在下文的“Related Definitions”中定义。这些内存类型也在ExitBootServices() 之前的内存类型使用和 ExitBootServices() 之后的内存类型使用中进行了更详细的描述。正常分配（即任何 UEFI 应用程序的分配）的类型为 EfiLoaderData。0x70000000..0x7FFFFFFF范围内的MemoryType值保留供 OEM 使用。0x80000000..0xFFFFFFFF 范围内的MemoryType值保留供操作系统供应商提供的 UEFI OS 加载程序使用。
+;   IN UINTN                               Pages，要分配的 4KB 连续页数量
+;   IN OUT EFI_PHYSICAL_ADDRESS            *Memory，指向物理地址的指针。输入时，地址的使用方式取决于Type的值。有关更多信息，请参阅“Definitions”。输出时，地址设置为已分配页面范围的基数。请参阅“Related Definitions”
+;   );
+;注意：UEFI 应用程序、UEFI 驱动程序和 UEFI OS 加载器不得分配类型为EfiReservedMemoryType、EfiMemoryMappedIO和EfiUnacceptedMemoryType 的内存
+
+;//******************************************************
+;//EFI_ALLOCATE_TYPE
+;//******************************************************
+;// These types are discussed in the "Description" section below.
+;typedef enum {
+;   AllocateAnyPages,
+;   AllocateMaxAddress,
+;   AllocateAddress,
+;   MaxAllocateType
+;} EFI_ALLOCATE_TYPE;
+
+;//******************************************************
+;//EFI_MEMORY_TYPE
+;//******************************************************
+;// These type values are discussed in Memory Type Usage before ExitBootServices()  and  Memory Type Usage after ExitBootServices().
+;typedef enum {
+;   EfiReservedMemoryType,
+;   EfiLoaderCode,
+;   EfiLoaderData,
+;   EfiBootServicesCode,
+;   EfiBootServicesData,
+;   EfiRuntimeServicesCode,
+;   EfiRuntimeServicesData,
+;   EfiConventionalMemory,
+;   EfiUnusableMemory,
+;   EfiACPIReclaimMemory,
+;   EfiACPIMemoryNVS,
+;   EfiMemoryMappedIO,
+;   EfiMemoryMappedIOPortSpace,
+;   EfiPalCode,
+;   EfiPersistentMemory,
+;   EfiUnacceptedMemoryType,
+;   EfiMaxMemoryType
+;} EFI_MEMORY_TYPE;
+
+;//******************************************************
+;//EFI_PHYSICAL_ADDRESS
+;//******************************************************
+;typedef UINT64 EFI_PHYSICAL_ADDRESS;
+
+;AllocatePages() 函数分配请求的页数，并返回指向Memory引用位置的页范围基址的指针。该函数扫描内存映射以查找空闲页。当它找到一个物理上连续的、足够大且满足Type分配要求的页块时，它会更改内存映射以指示这些页现在属于MemoryType类型
+
+;一般而言，UEFI OS 加载器和 UEFI 应用程序应分配 EfiLoaderData 类型的内存（和池）。UEFI 启动服务驱动程序必须分配 EfiBootServicesData 类型的内存（和池）。UREFI 运行时驱动程序应分配 EfiRuntimeServicesData 类型的内存（和池）（尽管此类分配只能在启动服务期间进行）
+
+;AllocateAnyPages类型的分配请求分配满足请求的任何可用页面范围。输入时， Memory指向的地址将被忽略。
+
+;AllocateMaxAddress类型 的分配请求分配任何可用的页面范围，其最高地址小于或等于输入时Memory指向的地址
+
+;AllocateAddress类型的分配请求在输入的Memory指向的地址处分配页面
+
+;注意：不针对特定实现的 UEFI 驱动程序和 UEFI 应用程序必须使用 AllocateAnyPages 地址模式为以下运行时类型执行内存分配：
+;EfiACPIReclaimMemory
+;EfiACPIMemoryNVS
+;EfiRuntimeServicesCode
+;EfiRuntimeServicesData
+;EfiReservedMemoryType
+
+;输入RCX函数类型，RDX页类型，R8 4K页数，R9物理地址指针
+;输出
+;将会修改寄存器
+函数_从系统分配内存页:
+
+
+
+call [rel + 分配内存页函数指针]
+
+
+ret
 
 
 
@@ -378,12 +597,61 @@ jmp 暂停
 
 
 
+获取指定的句柄表函数返回状态的字符串指针表起始:
+dq 表示返回句了柄数组的字符串
+dq 表示没有与搜索相匹配的句柄字符串
+dq 表示指向缓冲区大小的指针为空的字符串
+dq 表示搜索类型不是EFI_LOCATE_SEARCH_TYPE的成员的字符串
+dq 表示搜索类型为ByProtocol且ProtocoL为空的字符串
+dq 表示找到一个或多个匹配项并且BufferSize为NULL字符串
+dq 表示缓冲区大小足够大以容纳结果但缓冲区指针为空的字符串
+
+
+
+
+
+
+
+
+
+
 ;字符串
 数据起始:
 
+字符串_间隔 dw 13
 回车加换行 dw 13
 换行 dw 10,0
 测试文本 db __utf16__ 'cialoo 0721',0,0
+块设备读写的UUid db 21h,5bh,4eh,96h,59h,64h,0d2h,11h,8eh,39h,00h,0a0h,0c9h,69h,72h,3bh
+表示返回句了柄数组的字符串 db __utf16__ 'The array of handles was returned',0,0
+表示没有与搜索相匹配的句柄字符串 db __utf16__ 'No handles match the search',0,0
+表示指向缓冲区大小的指针为空的字符串 db __utf16__ 'Pointer to buffer size is null',0,0
+表示搜索类型不是EFI_LOCATE_SEARCH_TYPE的成员的字符串 db __utf16__ 'SearchType is not a member of EFI_LOCATE_SEARCH_TYPE',0,0
+表示字搜索类为ByRegisterNotify且SearchKey为空的型符串 db __utf16__ 'SearchType is ByRegisterNotify and SearchKey is NULL',0,0
+表示搜索类型为ByProtocol且ProtocoL为空的字符串 db __utf16__ 'SearchType is ByProtocol and ProtocoL is NULL',0,0
+表示找到一个或多个匹配项并且BufferSize为NULL字符串 db __utf16__ 'One or more matches are found and BufferSize is NULL',0,0
+表示缓冲区大小足够大以容纳结果但缓冲区指针为空的字符串 db __utf16__ 'BufferSize is large enough for the result and Buffer is NULL',0,0
+;db __utf16__
+;db __utf16__
+;db __utf16__
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 EFI_句柄 dq 0
@@ -396,11 +664,11 @@ EFI_返回地址 dq 0
 
 ;常用函的数指针
 ;int10打印字符串;BIOS中断不支持这个函数
-输出字符串函数指针 dq 0;输入参数为RCX是简单文本输出协议表用于判断调用是否正确，RDX是字符串指针
+输出字符串函数指针 dq 0
 定位句柄函数指针 dq 0
 打开协议函数指针 dq 0
-
-
+分配内存页函数指针 dq 0
+获取内存图函数指针 dq 0
 
 ;int10AH0e输出单个字符:;UEFI不支持这个函数
 int10AH02设置光标位置:
@@ -413,4 +681,4 @@ int10AH03获取光标位置:
 ;times 扇区大小 -  数据大小 db 0;对齐
 数据填充结束:
 
-缓存区起始:
+缓冲区起始:
