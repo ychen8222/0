@@ -1,0 +1,25 @@
+//MT管理器内文本编辑器的语法高亮
+{name:["Assembly",".asm",".s",".nas",".assembly"]//此后缀名表示为汇编语言
+ignoreCase:true//不区分大小写
+colors:[//自定义颜色
+"指令",#1750EB,#6897BB//蓝
+"数字",#067D17,#6A8759//绿
+"数值">"数字"
+"寄存器"#7050E0'#6080B0//浅蓝
+"伪指令"#205060'#508090 
+
+
+"注释",#8C8C8C,#808080]//灰
+//行注释
+comment:{startsWith:";"}//英特尔语法的注释
+comment:{startsWith:"//"}//AT&T语法的注释
+
+contains:[
+{match: /(?:^|\n|\ *)#{1,6} .*/, 0: "strEscape"}
+{match: /(?:^|\n|\ *)[\*|-] .*/, 0: "number"}
+{match:keywordsToRegex("xchg movzx jb ja stc cmp cli hit nop inc dec jz jnz jmp jc jnc js jns shr shl rep repe cmpsb cmpsw ud2 mov add sub test int or push and pop call ret retf retfq div mul loop"),0:"指令"}
+{match:keywordsToRegex("al ah ax eax rax bl bh bx ebx rbx cl ch cx ecx rcx dl dh dx edx rdx si esi rsi di edi rdi bp ebp rbp sp esp rsp ds es fs gs ss"),0:"寄存器"}
+{match:keywordsToRegex("short far byte db word dw dword dd qword dq equ org"),0:"伪指令"}
+]
+
+}
