@@ -17,6 +17,7 @@ DOS段地址 equ 60000h;～DOS结束=Loader.Bin
 缓存区_3 equ 70000h;～7FFFF
 
 
+mov bl,bl;处理器架构标识
 push ax
 push cx
 push si
@@ -112,6 +113,96 @@ CALL 显示寄存器
 jmp $
 jmp 8000h:0h;进入命令处理程序
 未知文件系统 db '?File System?'
+
+
+
+
+loc_C852:                               ; CODE XREF: MEMORY:loc_C26B↑p
+pushf
+xor     ax, ax
+push    ax
+popf
+pushf
+pop     ax
+test    ax, 8000h
+mov     ax, 0
+jnz     short loc_C874
+mov     ax, 7000h
+push    ax
+popf
+sti
+pushf
+pop     ax
+test    ax, 7000h
+mov     ax, 286h
+jz      short loc_C874
+mov     ax, 386h
+loc_C874:; CODE XREF: MEMORY:C85F↑j
+; MEMORY:C86F↑j
+popf
+retn
+
+db 'requires a computer with an 80386 processor or higher'
+
+
+
+; Function: check_386
+;           Check if this processor is at least a 386
+;
+; Inputs:   None
+; Clobbers: AX
+; Returns:  ZF=0 if Processor earlier than a 386, ZF=1 if processor is 386+
+
+check_386:
+    xor ax, ax                 ; Zero EFLAGS
+    push ax
+    popf                       ; Push zeroed flags
+    pushf
+    pop ax                     ; Get the currently set flags
+    and ax, 0xf000             ; if high 4 bits of FLAGS are not set then
+    cmp ax, 0xf000             ;     CPU is an 8086/8088/80186/80188
+    je .error                  ;     and exit with ZF = 0
+    mov ax, 0xf000             ; Set the high 4 bits of FLAGS to 1
+    push ax
+    popf                       ; Update the FLAGS register
+    pushf                      ; Get newly set FLAGS into AX
+    pop ax
+    and ax, 0xf000             ; if none of the high 4 bits are set then
+    jnz .noerror               ;     CPU is an 80286. Return success ZF = 1
+                               ;     otherwise CPU is a 386+
+.error:
+    xor ax, ax                 ; Set ZF = 0 (Earlier than a 386)
+.noerror:
+    ret
+
+
+		; mov     ax,7202h
+        ; push    ax
+        ; popf
+        ; pushf
+        ; pop     bx
+        ; cmp     ax,bx
+        ; je      ProcessorOk
+        ; call    InitError
+        ; db      'needed 386+',36
+      ; ProcessorOk:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -679,7 +770,7 @@ inc dword[逻辑扇区号];推进到下一个扇区
 mov edx,0;LBA高位
 mov ebx,缓存区_3
 mov cx,1
-call 读盘
+call LBA48读盘
 add bx,es:[bx];跳过一个.目录
 add bx,es:[bx];跳过一个..目录
 
@@ -1133,7 +1224,7 @@ mov eax,[逻辑扇区号];取
 mov edx,0;LBA高位
 or ebx,1001_0000_0000_0000_0000_0000_0000_0000b;段，不能修改在低位的偏移值
 ;add bx,[扇区大小-DOS起始];偏
-call 读盘
+call LBA48读盘
 inc dword[逻辑扇区号];推
 
 不用读盘:
@@ -1224,7 +1315,7 @@ mov [标记逻辑扇区号-DOS起始],eax
 mov edx,0;LBA高位
 mov ebx,8000_0000h;段地址
 mov bx,DOS结束-DOS起始+1024;偏移地址，用于缓存FAT表，不能被其他东西覆盖
-call 读盘;只需要读一个扇区的FAT表即可
+call LBA48读盘;只需要读一个扇区的FAT表即可
 
 读取簇号:
 pop bx;恢复我们的FAT表内偏移
@@ -1328,7 +1419,7 @@ jz 扇区已完
 mov eax,[逻辑扇区号]
 mov edx,0;LBA高位
 mov ebx,ecx;缓存区址
-call 读盘
+call LBA48读盘
 inc dword[逻辑扇区号];推进到下一个扇区
 dec word[t_u8_1]
 and byte cs:[标志],1111_1011b
@@ -1390,7 +1481,7 @@ mov eax,[逻辑扇区号]
 inc dword[逻辑扇区号];推进到下一个扇区
 mov edx,0;LBA高位
 mov ebx,ecx
-call 读盘
+call LBA48读盘
 
 Do返回_1:;
 pop ds
@@ -1415,7 +1506,7 @@ mov eax,0;第一个扇区一般为MBR，也有可能是DBR
 mov edx,0;LBA高位
 mov ebx,9000_0000h;缓存区，段地址
 mov bx,DOS结束-DOS起始;偏移地址，在此处放置扇区
-call 读盘
+call LBA48读盘
 cmp dword[bx+510],0AA55h;判断数
 jz 分区表正常
 mov si,未检测到分区表
@@ -1658,12 +1749,13 @@ mov ebx,缓存区_3
 mov eax,[esp+4]
 mov edx,0;LBA高位
 mov cx,bp
-call 读盘
+call LBA48读盘
 add [esp+4],ebp
 mov esi,ebx
 mov edi,[esp+8]
 mov ecx,0FFFFh
-call 复制此处内存里的数据到内存的别处
+cld;正序复制
+call 复制此处内存里的数据到别处内存
 add dword[esp+8],0FFFFh
 jmp 读入文件扇区_1
 
@@ -1693,13 +1785,14 @@ mov ebx,缓存区_3
 mov cx,ax
 mov eax,[esp+4]
 mov edx,0;LBA高位
-call 读盘
+call LBA48读盘
 mov esi,ebx
 movzx ecx,di
 mov edi,[esp+8]
-call 复制此处内存里的数据到内存的别处
+call 复制此处内存里的数据到别处内存
 
 刚好读完_1:
+jnz $
 and byte cs:[标志],1111_1110b;我们获取过文件项别忘了这个
 add sp,12
 jmp 不允许修改路径_1
@@ -1756,7 +1849,7 @@ mov [esp+10],dx;刷，光标位置
 继续查找项:
 call FAT32获取一个项
 jc 没有匹配项
-
+;http://www.ctyme.com/intr/rb-0210.htm
 mov esi,eax;Save簇
 push dx;+0！，Save长
 mov dx,[esp+10+2];光标位置
@@ -2009,7 +2102,7 @@ stosb
 ;输入DS：Si=UTF16字符串，需要结束符且至少为Word大小，ES：Di缓存区
 ;输出ES：Di=UTF8字符串结尾，不含结束符
 ;jbe指令示例cmp al,1 jbe,小于等于则跳转;被测试位 =0则ZF =1
-;bswap指令把第一byte跟倒数第一byte互换，第二byte跟倒数第二byte互换
+;bswap指令把第一byte跟倒数第一byte互换，第二byte跟倒数第二byte互换以此类推
 ;┌-------┐
 ;│ ┌-┐ │
 ;00 00 00 00h
@@ -2184,15 +2277,15 @@ loop 还未转换结束_1
 ;将会修改AH，DL，Si寄存器
 ;输入EAX=LBA低32位，EDX=LBA高32位，EBX高32位段地址+低32位偏移地址，CX要读取的块数
 ;输出
-读盘:
+LBA48读盘:
 push edx;[12]LBA高32位
 push eax;[8]LBA低32位
 ;word[6]段地址
 push ebx;[4]偏移地址
 shl word[esp+2],12;×1000h
-;byte[3]保留，必须为0，CX的高位就是这里的值应当清空CH寄存器，注意栈最小压Word
-push cx;[2]要传输的扇区数0~127
-;byte[1]保留，必须为0，这是参数块的高位，注意栈最小压Word
+;byte[3]保留，必须为0，正好被下面的push cx覆盖，ch位为零，注意栈最小压Word
+push cx;[2]要传输的扇区数只能是0~127
+;byte[1]保留，必须为0，由于栈最小压Word所以正好被下面的push 16所覆盖，这是参数块的高位
 push byte 16;[0]参数块大小，注意栈最小压Word
 
 mov ah,42h;调用号
@@ -2250,57 +2343,68 @@ ret
 
 
 
-;将会修改ECX，DX，EDi，Si寄存器
+;将会修改ES,EAX，ECX，DX，ESi，EDi寄存器
 ;输入ECX数据字节长度，ESi数据，EDi要复制到的位置
-;输出
-复制此处内存里的数据到内存的别处:
-mov dx,8
-call 设置段寄存器的隐藏部分
-mov ax,0
-mov ds,ax
-mov es,ax
-mov al,cl
-shr ecx,2;÷4，以便最高效复制
-rep
-db 67h;32位寻址
-db 66h;32位操作数，+movsw=movsd
-movsw
+;输出如果CF为1则表示在对比源缓存区和目标缓存内的数据时发现不相同，这可能是目标缓存区不能写入或已被其他程序所修改，EDi是在对比时停下来的位置
+;movs串操作指令也可以使用超越段前缀来自使用任何一个段寄存器
+复制此处内存里的数据到别处内存:
+mov eax,ecx;保存因为下面的对比俩缓存区是否相同时还需要用到
+stc
+call 设置ES段寄存器的隐藏部分
+mov dx,0
+mov es,dx;让调试器计算的地址正确
+mov ecx,eax
+shr ecx,2; ÷ 4，以便更高效复制
+;rep a32 movsd是使用默认的DS寄存器，我并不知道nasm所支持的写法，但我突然想到可以先写操作码然后用ndisasm反编译，这样我就知道写法了
+rep a32 es movsd
 mov cl,al
 and cl,11b;只保留低2位
-rep
-db 67h;32位寻址
-movsb;如果CX为0则什么都不操作
-mov dx,16
-call 设置段寄存器的隐藏部分
-mov dx,cs
-mov ds,dx
+rep a32 es movsb;如果CX为0则什么都不操作
+mov ecx,eax;开始判断俩缓存区内的数据是否相同
+sub esi,eax;将被推进的俩缓存区指针退回去
+sub edi,eax
+shr ecx,2; ÷ 4，以便更高效对比
+repe a32 es cmpsd
+jnz 发现不同则无需对比剩余部分了
+
+mov cl,al
+and cl,11b;只保留低2位
+repe a32 es cmpsb
+
+发现不同则无需对比剩余部分了:
+lahf;保存标志寄存器因为需要返回ZF位
+clc
+call 设置ES段寄存器的隐藏部分
+sahf
 sti;开中断
 ret
 
 
 
-;将会修改EAX，BX，DS，ES，FS，GS寄存器，iF标志位
-;无输入
+;将会修改EAX，DX，ES，GDTR寄存器，iF标志位
+;输入如果CF是0则设置ES寄存器，如果CF是1则还原ES寄存器
 ;输出
-设置段寄存器的隐藏部分:
-lgdt cs:[Gdtcfg-DOS起始];读入GDT长度及位置
-mov eax,cr0
-or al,1b
+设置ES段寄存器的隐藏部分:
+mov dx,8;虚幻模式
+jc 跳过再次赋值为GDT第2项
+
+mov dx,16;实模式
+
+跳过再次赋值为GDT第2项:
+lgdt cs:[Gdtcfg - DOS起始];读入GDT长度及位置
+mov ecx,cr0
+or cl,1b
 cli;关中断
-mov cr0,eax
+mov cr0,ecx
 jmp short ProtectedMode;进入兼容模式
 
 ProtectedMode:;
-mov ds,dx
 mov es,dx
-mov fs,dx
-mov gs,dx
-and al,1111_1110b
-mov cr0,eax
-jmp DOS段地址/16:RealMode-DOS起始;进入实模式
+and cl,1111_1110b
+mov cr0,ecx
+jmp DOS段地址 / 16 : RealMode - DOS起始;进入实模式
 
 RealMode:;
-;sti;开中断
 ret
 
 
@@ -2426,7 +2530,7 @@ cld;恢复正序
  hlt
 jmp short 停
 
-_cs_ip db '=Pi+61*SC',10,13
+_cs_ip db '=Pi + 61 * SC',10,13
 错误的操作码 db 13,'Undefined opcode_',0
 
 
