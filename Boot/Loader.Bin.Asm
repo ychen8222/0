@@ -7,6 +7,9 @@
 ;2023年
 ;该死的Win系统损坏，害得我丢失亿些东西，只能重新写了\
 @cya
+
+;改正由于寄存器大小操作失误而导致的不必要复制
+;@cya。2025|5|1
 ;----------------------------------------------------------------------------
 
 ;内存布局
@@ -31,19 +34,18 @@ push si;再次压栈，基地址
 add si,DOS起始
 mov di,cs;DS=CS
 mov ds,di
-mov di,DOS段地址/16;Loader将自己复制到的位置
+mov di,DOS段地址 / 16;Loader将自己复制到的位置
 mov es,di
 mov di,0
 mov fs,di;DS，ES段寄存器已被占用
-mov cx,DOS结束-DOS起始
-push cx
-shr cx,2;÷4，以便最高效复制
-rep movsd;如果CX为0则什么都不操作
-pop cx
-and cl,11b;只保留低二位
+mov cx,DOS结束 - DOS起始
+shr cx,2; ÷ 4，以便最高效复制
+rep movsd
+ScalarValues equ DOS结束 - DOS起始 - 无需复制此代码
+mov cl,ScalarValues & 11b;只保留低二位
 rep movsb;如果CX为0则什么都不操作
 
-mov cx,DOS段地址/10h;现在写入我们的中断程序
+mov cx,DOS段地址 / 16;现在写入我们的中断程序
 mov fs:[2],cx;段地址
 mov word fs:[0],int0-DOS起始;偏移地址
 
@@ -117,32 +119,32 @@ jmp 8000h:0h;进入命令处理程序
 
 
 
-loc_C852:                               ; CODE XREF: MEMORY:loc_C26B↑p
-pushf
-xor     ax, ax
-push    ax
-popf
-pushf
-pop     ax
-test    ax, 8000h
-mov     ax, 0
-jnz     short loc_C874
-mov     ax, 7000h
-push    ax
-popf
-sti
-pushf
-pop     ax
-test    ax, 7000h
-mov     ax, 286h
-jz      short loc_C874
-mov     ax, 386h
-loc_C874:; CODE XREF: MEMORY:C85F↑j
-; MEMORY:C86F↑j
-popf
-retn
+; loc_C852:                               ; CODE XREF: MEMORY:loc_C26B↑p
+; pushf
+; xor     ax, ax
+; push    ax
+; popf
+; pushf
+; pop     ax
+; test    ax, 8000h
+; mov     ax, 0
+; jnz     short loc_C874
+; mov     ax, 7000h
+; push    ax
+; popf
+; sti
+; pushf
+; pop     ax
+; test    ax, 7000h
+; mov     ax, 286h
+; jz      short loc_C874
+; mov     ax, 386h
+; loc_C874:; CODE XREF: MEMORY:C85F↑j
+; ; MEMORY:C86F↑j
+; popf
+; retn
 
-db 'requires a computer with an 80386 processor or higher'
+; db 'requires a computer with an 80386 processor or higher'
 
 
 
@@ -153,27 +155,27 @@ db 'requires a computer with an 80386 processor or higher'
 ; Clobbers: AX
 ; Returns:  ZF=0 if Processor earlier than a 386, ZF=1 if processor is 386+
 
-check_386:
-    xor ax, ax                 ; Zero EFLAGS
-    push ax
-    popf                       ; Push zeroed flags
-    pushf
-    pop ax                     ; Get the currently set flags
-    and ax, 0xf000             ; if high 4 bits of FLAGS are not set then
-    cmp ax, 0xf000             ;     CPU is an 8086/8088/80186/80188
-    je .error                  ;     and exit with ZF = 0
-    mov ax, 0xf000             ; Set the high 4 bits of FLAGS to 1
-    push ax
-    popf                       ; Update the FLAGS register
-    pushf                      ; Get newly set FLAGS into AX
-    pop ax
-    and ax, 0xf000             ; if none of the high 4 bits are set then
-    jnz .noerror               ;     CPU is an 80286. Return success ZF = 1
-                               ;     otherwise CPU is a 386+
-.error:
-    xor ax, ax                 ; Set ZF = 0 (Earlier than a 386)
-.noerror:
-    ret
+; check_386:
+    ; xor ax, ax                 ; Zero EFLAGS
+    ; push ax
+    ; popf                       ; Push zeroed flags
+    ; pushf
+    ; pop ax                     ; Get the currently set flags
+    ; and ax, 0xf000             ; if high 4 bits of FLAGS are not set then
+    ; cmp ax, 0xf000             ;     CPU is an 8086/8088/80186/80188
+    ; je .error                  ;     and exit with ZF = 0
+    ; mov ax, 0xf000             ; Set the high 4 bits of FLAGS to 1
+    ; push ax
+    ; popf                       ; Update the FLAGS register
+    ; pushf                      ; Get newly set FLAGS into AX
+    ; pop ax
+    ; and ax, 0xf000             ; if none of the high 4 bits are set then
+    ; jnz .noerror               ;     CPU is an 80286. Return success ZF = 1
+                               ; ;     otherwise CPU is a 386+
+; .error:
+    ; xor ax, ax                 ; Set ZF = 0 (Earlier than a 386)
+; .noerror:
+    ; ret
 
 
 		; mov     ax,7202h
@@ -2006,16 +2008,16 @@ ret
 ;ES：Di =16进制ascall码，结尾为0，注意倒序应使用std指令
 二进制转十六进制ascall码:
  mov al,bl
- shr ebx,4;显示了一位
- and al,0000_1111b;只保留低四位
+ shr ebx,4;推进到下一个字符
+ and al,0000_1111b;只保留低四位，因为4位就能表示一个字符
  cmp al,10;是字母
  jb 小于则跳转
 
- add al,7;补齐，数字到字母之间隔了几个符号
+ add al,7;补齐到字母，因为数字到字母之间隔了几个符号
  
 小于则跳转 add al,'0';此0非彼0
  stosb;存入
- cmp ebx,0
+ cmp ebx,0;判断是否转换完毕
 jnz 二进制转十六进制ascall码
 
 ret
