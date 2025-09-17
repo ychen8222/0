@@ -25,11 +25,10 @@ push ax
 push cx
 push si
 push di
-call 自定位
+call 自定位;https://devblogs.microsoft.com/oldnewthing/20041216-00/?p=36973
 
-自定位:
-pop si
-sub si,自定位
+自定位的返回地址:
+sub si,自定位的返回地址
 push si;再次压栈，基地址
 add si,DOS起始
 mov di,cs;DS=CS
@@ -37,15 +36,17 @@ mov ds,di
 mov di,DOS段地址 / 16;Loader将自己复制到的位置
 mov es,di
 mov di,0
-mov fs,di;DS，ES段寄存器已被占用
+mov fs,di;顺便清空FS段，DS，ES段寄存器已被占用
 mov cx,DOS结束 - DOS起始
 shr cx,2; ÷ 4，以便最高效复制
 rep movsd
-ScalarValues equ DOS结束 - DOS起始 - 无需复制此代码
+
+ScalarValues equ DOS结束 - DOS起始
+
 mov cl,ScalarValues & 11b;只保留低二位
 rep movsb;如果CX为0则什么都不操作
 
-mov cx,DOS段地址 / 16;现在写入我们的中断程序
+mov cx,es;DOS段地址 / 16;现在写入我们的中断程序
 mov fs:[2],cx;段地址
 mov word fs:[0],int0-DOS起始;偏移地址
 
@@ -99,6 +100,11 @@ add bx,bp;加基地址
 xchg bx,dx
 jmp dx;跳转CS：DX
 
+自定位:
+mov si,sp
+mov si,ss:[si]
+ret
+
 文件系统类型_1:
 dw 无法确定文件系统类型
 dw iSO9660文件系统
@@ -117,8 +123,8 @@ jmp 8000h:0h;进入命令处理程序
 未知文件系统 db '?File System?'
 
 
-
-
+;https://github.com/microsoft/MS-DOS/blob/2d04cacc5322951f187bb17e017c12920ac8ebe2/v4.0/src/INC/CPUTYPE.INC#L10
+;https://wiki.osdev.org/User:ChosenOreo/CPU_Detection
 ; loc_C852:                               ; CODE XREF: MEMORY:loc_C26B↑p
 ; pushf
 ; xor     ax, ax
@@ -194,7 +200,7 @@ jmp 8000h:0h;进入命令处理程序
 
 
 
-
+;打印字符串时并不会一个字符就修改一次显卡字体，而是先把这串字符的字体全部提取出来再一次性修改字体，如果是打印单个字符的模式的话就要一次又一次的修改显卡字体了，这样会很慢
 
 
 
@@ -1742,10 +1748,9 @@ mov dx,0;清空除法高位
 div word[扇区大小];dx高：ax低÷[内存单元] =ax…dx
 movzx ebp,ax
 
-
 读入文件扇区_1:
-sub dword[esp+0],0FFFFh
-jc 不能读那么多扇区了_1;不够0FFFFh时会触发进位
+sub dword[esp+0],0000FFFFh
+jc 不能读那么多扇区了_1;不够0000FFFFh时会触发进位
 
 mov ebx,缓存区_3
 mov eax,[esp+4]
@@ -1758,12 +1763,12 @@ mov edi,[esp+8]
 mov ecx,0FFFFh
 cld;正序复制
 call 复制此处内存里的数据到别处内存
-add dword[esp+8],0FFFFh
+add dword[esp+8],0000FFFFh
 jmp 读入文件扇区_1
 
 
 不能读那么多扇区了_1:
-mov ax,[esp+0];已经不够0FFFFh了我们要低位就行
+mov ax,[esp+0];已经不够0000FFFFh了我们要低位就行
 add ax,0FFFFh
 jz 刚好读完_1
 
@@ -2411,17 +2416,19 @@ ret
 
 
 Gdtcfg:;
-dw GdtEnd-GdtStart-1;长度-1以忽略后1字节
-dd GdtStart-DOS起始+DOS段地址;+基地址
+dw GdtEnd-GdtStart - 1;长度-1以忽略后1字节
+dd GdtStart - DOS起始 + DOS段地址;+基地址
 GdtStart:;
 dq 0h;听说设置个空的段描述符是为了防止从16位实地址模式切换到32位保护模式后忘记设置段寄存器引发的问题。
 
+;虚幻模式描述符
 dw 0FFFFh;段长度
 db 0,0,0;基地址
 db 92h;10010010b;段属性
 db 8Fh;1100_1111b;段属性_段长度1111b
 db 0;基地址00h
 
+;实模式描述符
 dw 0FFFFh;段长度
 db 0,0,0;基地址
 db 92h;10010010b;段属性
