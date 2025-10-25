@@ -27,6 +27,7 @@
 
 ;内存布局
 缓存区_1 equ 500h
+缓冲区1 equ 500h
 缓存区_2 equ 2000h
 缓存区_3 equ 10000h
 
@@ -38,8 +39,8 @@ jmp 跳过引导扇区内缺失的部分;当你在UltraISO把一个超大的文�
 times 40h - ($ - $$) db 0;填充以跳过BiOS漏加载的这一小节
 
 跳过引导扇区内缺失的部分:;判断引导扇区结束符以检查完整性
-cmp word[7c00h + 2048 * 2 - 2],0AA55h;如果你在UltraISO把一个超大的文件错误的设置成了引导文件然后即使将正确的文件设为引导文件也会产生BUG，表现为BiOS只加载一个2048大小的扇区，致使引导代码有缺失因此首先我需要检查一下完整性
-jz 引导扇区完整
+cmp word[引导扇区结束符],0AA55h;如果你在UltraISO把一个超大的文件错误的设置成了引导文件然后即使将正确的文件设为引导文件也会产生BUG，表现为BiOS只加载一个2048大小的扇区，致使引导代码有缺失因此首先我需要检查一下完整性
+jz 完整的引导扇区
 
 mov si,字符串_引导扇区不完整
 jmp 打印并退出
@@ -49,7 +50,7 @@ jmp 打印并退出
 
 
 
-引导扇区完整:
+完整的引导扇区:
 mov sp,7c00h;清空高位
 mov es,ax
 mov ax,4b01h;获取光盘仿真状态，与AX=4b00h相同但不终止仿真
@@ -63,24 +64,14 @@ jnz 光盘处于仿真模式
 
 mov dl,[si+2];DS：Si规格包已填充
 cmp [驱动器号],dl;驱动器号应该相同
-jz 判断文件系统类型
+jnz 驱动器号不同
 
-mov si,消息驱动器号不同
-jmp 打印并退出
-
-获取光盘参数时异常:
-mov si,消息光盘错误
-jmp 打印并退出
-
-光盘处于仿真模式:
-mov si,消息光盘处于仿真模式不可使用光盘文件系统
-jmp 打印并退出
 
 
 ;https://www.cnwrecovery.com/manual/HowToRecogniseTypeOfCDDVD.html
 ;https://forum.osdev.org/viewtopic.php?t=23554
 ;https://wiki.osdev.org/UDF
-判断文件系统类型:
+;判断文件系统类型:
 ;push bp;创建栈帧
 mov bp,sp
 sub sp,判断文件系统类型的函数栈帧大小
@@ -166,7 +157,7 @@ jnz iSO9660文件系统;没有扩展卷就直接跳走
  dec byte[bp - 数据区起始的卷描述符读取扇区数递减]
 jnz 下一个扩展卷
 
-
+;https://kikakurui.com/x0/X0606-1998-01.html
 iSO9660文件系统:
 add sp,判断文件系统类型的函数栈帧大小;移除栈帧
 mov byte[文件系统类型],1;标记为iSO9660文件系统
@@ -177,26 +168,41 @@ mov si,缓存区_1+1;+1跳过卷描述符前面表示卷号的Byte
 mov ax,2020h;2个空格
 mov [si+5],ax;覆盖掉不知道什么东西以免影响显示
 call 打印
-mov si,字符串_换行
+mov si,消息_回车加换行
 call 打印
 mov ax,[缓存区_1+128]
 mov [实际扇区大小],ax
-mov ecx,[缓存区_1+156+2];根目录的目录项+2双端格式的范围位置 (LBA)，2~8÷2
-mov eax,[缓存区_1+156+10];根目录的目录项+10双端格式的数据长度（范围大小）
-mov [根目录逻辑扇区],ecx;备份Loader需要的参数
-mov [根目录大小],eax;RootSize
-mov si,BOOT
-mov bl,1;获取的类型为文件夹
-call iSO9660的检索文件或文件夹
-jc 没有找到BOOT文件夹
+mov cx,16
+jmp $
+扇区大小计算位移次数:
+ shr ax,1
+ jc 扇区大小位移计算结束
 
-call 打印斜杠
-mov si,LOADER
-mov bl,0;获取的类型为文件
+loop 扇区大小计算位移次数
+
+扇区大小位移计算结束:
+mov ch,16
+sub ch,cl;最大次数减去剩余次数等于已使用次数
+mov [数据长度转扇区数量的位移次数],ch
+mov ax,[缓存区_1 + 156 + 2];根目录的目录项+2双端格式的范围位置 (LBA)，2~8÷2
+mov si,[缓存区_1 + 156 + 2 + 2]
+mov dx,[缓存区_1 + 156 + 10];根目录的目录项+10双端格式的数据长度（范围大小）
+mov di,[缓存区_1 + 156 + 10 + 2]
+mov [根目录逻辑扇区],ax;备份Loader需要的参数
+mov [根目录逻辑扇区 + 2],si
+mov [根目录大小],dx;RootSize
+mov [根目录大小 + 2],di
+;mov ecx,[根目录逻辑扇区]
+;mov eax,[根目录大小]
+mov bx,LOADER
+mov cl,10;文件名长度
+mov ch,0;获取的类型为文件
 call iSO9660的检索文件或文件夹
 jc 没有找到LOADER文件
 
-mov ebx,缓存区_1
+mov bx,1000h
+mov es,bx
+mov bx,0
 call iSO9660读入扇区
 mov eax,[根目录大小]
 mov bx,[实际扇区大小]
@@ -204,7 +210,7 @@ mov ecx,[根目录逻辑扇区]
 mov dl,[驱动器号]
 mov dh,[文件系统类型]
 mov bp,0AA55h;我们的标识
-jmp 0:缓存区_1
+jmp 1000h:0
 
 
 
@@ -226,7 +232,7 @@ jmp UTF16字符前面的_0填充为空格
 UTF16字符前面的_0已经填充完了:;
 mov si,缓存区_1+1;+1跳过卷描述符前面表示卷号的Byte
 call 打印
-mov si,字符串_换行
+mov si,消息_换行
 call 打印
 mov ax,[缓存区_1+128]
 mov [实际扇区大小],ax
@@ -234,18 +240,14 @@ mov ecx,[缓存区_1+156+2];根目录的目录项+2双端格式的范围位置 (
 mov eax,[缓存区_1+156+10];根目录的目录项+10双端格式的数据长度（范围大小）
 mov [根目录逻辑扇区],ebx;备份Loader需要的参数
 mov [根目录大小],eax;RootSize
-mov si,BOOT
-mov bl,1;需要文件夹
-call Joliet的检索文件或文件夹
-jc 没有找到BOOT文件夹
-
-call 打印斜杠
 mov si,LOADER
 mov bl,0;需要文件
 call Joliet的检索文件或文件夹
 jc 没有找到LOADER文件
 
-mov ebx,ecx
+mov bx,1000h
+mov es,bx
+mov bx,0
 mov ecx,缓存区_1
 call iSO9660读入扇区
 mov eax,[根目录大小]
@@ -261,27 +263,30 @@ jmp 0:缓存区_1
 ;https://ecma-international.org/publications-and-standards/technical-reports/ecma-tr-112/
 ;https://www.yumpu.com/en/document/view/26257693/udf-200-osta-optical-storage-technology-association
 ;https://kikakurui.com/x0/X0611-2018-01.html
-UDF文件系统:;UniversalDiskFormat
+;Universal Disk Format，Universal Disc Format通用光盘格式
+UDF文件系统:;UDFS
 push bp;创建栈帧
 mov bp,sp
 sub sp,获取UDF基本参数的函数栈帧大小 - 判断文件系统类型的函数栈帧大小
-mov byte[文件系统类型],4;标记为UDFS文件系统
+mov byte[文件系统类型],4;标记为UDFS
 mov byte[bx + 1 + 5],0;字符串结束符
 lea si,[bx + 1];指向文件系统的名称
 call 打印
-mov si,字符串_回车加换行
+mov si,消息_回车加换行
 call 打印
-;AnchorVolumeDescriptorPointer锚点卷指针描述符固定位于位于第256扇区 ，备份副本位于N-1 或 N（N 为介质最后一个扇区）
+;Anchor Volume Descriptor Pointer 锚点卷描述符指针
+;AnchorVolumeDescriptor锚点卷描述符固定位于位于第256扇区 ，备份副本位于N-1 或 N（N 为介质最后一个扇区）
 ;AVDP是UDF文件系统的第一个卷描述符，他指向主卷描述符序列MainVolumeDescriptorSequence的起始扇区
-mov ax,256;AVDP的扇区号是固定的
+mov ax,256;AVDP是固定的
 mov si,0
 mov bx,缓存区_1
 mov dh,1;要读取的扇区数量
 call LBA48读扇区
 cmp word[缓存区_1],2;AVDP的标签
-jnz $;不是锚卷描述符
+jnz 没有读取到锚点卷描述符;不是锚卷描述符
 
-;现在开始读取MainVolumeDescriptorSequence主卷描述符序列包含逻辑卷描述符分区描述符等
+;Volume Descriptor Sequence，MainVolumeDescriptorSequence主卷描述符序列
+;现在开始读取MVDS主卷描述符序列包含逻辑卷描述符分区描述符等
 mov ax,[缓存区_1 + 16];MVDS的长度低16位
 mov dx,[缓存区_1 + 16 + 2];MVDS的长度高16位
 mov di,[缓存区_1 + 16 + 4];MVDS的起始扇区号低16位
@@ -311,7 +316,7 @@ mov [bp - 主卷描述符序列内扇区读取递进号低16位],ax
 mov [bp - 主卷描述符序列内扇区读取递进号高16位],si
 mov dh,1;要读取的扇区数量
 
-主卷描述符序列内扇区读取递进号高16位 equ 2
+主卷描述符序列内扇区读取递进号高16位 equ + 2
 主卷描述符序列内扇区读取递进号低16位 equ 主卷描述符序列内扇区读取递进号高16位 + 2
 主卷描述符序列扇区数 equ 主卷描述符序列内扇区读取递进号低16位 + 2
 文件集描述符所在分区号 equ 主卷描述符序列扇区数 + 2
@@ -329,8 +334,8 @@ mov dh,1;要读取的扇区数量
 遍历MVDS:;主卷描述符序列是一段区域，里面有多个描述符，每个描述符占一个扇区大小
  call LBA48读扇区
  mov ax,[缓存区_1]
- cmp ax,8;终止卷的标签
- jz $
+ cmp ax,8;终止卷描述符的标签
+ jz 在MVDS里没有找到所需的描述符
 
  cmp ax,5;PartitionDescriptor分区描述符的标签
  jnz 不是PD
@@ -379,17 +384,18 @@ mov dh,1;要读取的扇区数量
  dec cx
 jnz 遍历MVDS
 
-jmp $
+jmp 在MVDS里没有找到所需的描述符
 
 
+;File Set Descriptor文件集描述符的标签
 找到逻辑卷:;获取到了两个参数才会跳转到这里
 mov ax,[bp - 分区起始扇区号低16位]
 mov si,[bp - 分区起始扇区号高16位]
 add ax,[bp - 文件集描述符所在分区起始扇区号低16位]
 adc si,[bp - 文件集描述符所在分区起始扇区号高16位]
 call LBA48读扇区
-cmp word[缓存区_1],100h;FileSetDescriptor文件集描述符的标签
-jz $
+cmp word[缓存区_1],100h;文件集描述符的标签
+jnz 读取到错误的文件集描述符
 
 ;RootDirectoryICB根目录ICB
 ;mov ,[缓存区_1 + 400];ExtentLength
@@ -403,7 +409,7 @@ mov si,LOADER
 mov cl,10;文件名长度
 mov ch,0;需要文
 call 搜索一个指定的FiD条目
-jc $
+jc 没有搜索到文件LOADER
 
 call 读取FE
 mov sp,[bp - 0];移除栈帧
@@ -431,9 +437,11 @@ loop 位移计算文件的扇区数量
 mov di,ax;逻辑扇区号低16位
 mov si,bx;逻辑扇区号高16位
 mov bp,bx
-mov cl,dl;循环次数
+mov cx,dx;循环次数
 mov dh,1;读取的扇区数
-mov bx,缓存区_1
+mov bx,1000h
+mov es,bx
+mov bx,0
 jmp 不推进到下一个段_1;插入循环
 
 读取文件的栈帧大小 equ 0
@@ -446,18 +454,21 @@ mov si,bp
 add bx,扇区大小
 jnc 不推进到下一个段_1
 
-mov ax,es
-add ax,1000h
-mov es,ax
+mov dx,es
+add dx,1000h
+cmp dx,9000h
+jae 读取的文件大小超过512KB限制
 
+mov es,dx
+mov dh,1;DX被修改，重新赋值要读取的扇区数
 
 不推进到下一个段_1:
 call LBA48读扇区
 
 loop 读取下一个文件扇区
 
-jmp 0:500h
-;20号到25号，8点半到12点，1点半到4点
+jmp 1000h:0
+
 
 
 ;将会修改所有寄存器
@@ -498,7 +509,7 @@ ret
 
 
 ;将会修改所有寄存器
-;输入DS：Si文件名指针，CL文件名长度，CH需要的条目类型，AX=FiD卷的逻辑扇区号低16位，BX=FiD卷的逻辑扇区号高16位，DX=FiD卷的大小低16位，Di=FiD卷的大小高16位
+;输入Si文件名指针，CL文件名长度，CH需要的条目类型，AX=FiD卷的逻辑扇区号低16位，BX=FiD卷的逻辑扇区号高16位，DX=FiD卷的大小低16位，Di=FiD卷的大小高16位
 ;输出CX分区编号，AX=EF的逻辑扇区号低16位，Si=EF的逻辑扇区号高16位，BX=FE的大小低16位，DX=FE的大小高16位
 ;500;～1500;缓存区
 扇区大小 equ 2048
@@ -818,163 +829,214 @@ jmp 显示没有找到的文件或文件夹
 ;输入DS：Si文件或文件夹名的位置
 ;输出
 显示没有找到的文件或文件夹:
-mov [u16_1],si
-mov si,NONE
+push si
+mov si,消息_NONE
 call 打印
-mov si,[u16_1]
+pop si
+call 打印
+mov si,消息_回车加换行
 
 打印并退出:
 call 打印
-int 18h;返回BiOS
+
+返回BiOS:
+int 18h;启动其他的操作系统或进入ROM BASiC解释器
 
 
 
-;将会修改EAX，EBX，CX，DX，Si，Di寄存器
-;输入EAX数据长度，ECX逻辑扇区号，CX文件名位置，BL属性，Si文件名长度
-;输出EAX数据长度，ECX逻辑扇区号
+;将会修改AX，BX，CX，DX，Si，Di寄存器
+;输入AX=卷扇区号低16位，Si=卷扇区号高16位，DX=卷大小低16位，Di=卷大小高16位，BX文件名地址，CL文件名长度，CH需要的条目类型
+;输出AX逻辑扇区号低16位，Si逻辑扇区号高位16位，DX数据长度低16位，Di数据长度高16位
 iSO9660的检索文件或文件夹:
-sub sp,8
-mov byte[esp+0],0;第1项文件名长度
-mov [esp+1],si;第2项文件名位置
-;mov [esp+3],;第2项文件名长度
-mov word[esp+5],0;光标位置
-mov byte[esp+7],1;上1项字符长度 应该是0但使用此值会导致某些BiOS清空全屏，所以使用1来解决
-mov ebp,eax
-mov [u16_1],cx
-mov cx,si
+push bp;创建栈帧
+mov bp,sp
+sub sp,上一条目的字符长度
+;mov byte[bp - 上一iSO9660文件条目长度],0
+mov word[bp - 上一条目的字符长度],1;上一项字符长度 应该是0但使用此值会导致某些BiOS清空全屏，所以使用1来解决
+push si
+push ax
+push di
+push dx
+push word[实际扇区大小]
+push bx;mov [bp - 第一条文件名位置],bx
+sub sp,4
+mov byte[bp + 第二条文件名长度],0
+mov [bp -  第一条文件名长度],cl
+add word[bp - iSO9660文件名条目扇区缓冲区结束],缓冲区1
 
-计算文件或文件夹名长度:
-lodsb
-cmp al,0
-jz 得到文件或文件夹名长度
+上一iSO9660文件条目长度 equ + 1
+上一条目的字符长度 equ 上一iSO9660文件条目长度 + 1
+文件名表扇区号高16位 equ 上一条目的字符长度 + 2
+文件名表扇区号低16位 equ 文件名表扇区号高16位 + 2
+文件名表大小高16位 equ 文件名表扇区号低16位 + 2
+文件名表大小低16位 equ 文件名表大小高16位 + 2
+iSO9660文件名条目扇区缓冲区结束 equ 文件名表大小低16位 + 2
+第一条文件名位置 equ iSO9660文件名条目扇区缓冲区结束 + 2
+需要的属性位掩码 equ 第一条文件名位置 + 1
+需要的条目属性_1 equ 需要的属性位掩码 + 1
+第二条文件名长度 equ 需要的条目属性_1 + 1
+第一条文件名长度 equ 第二条文件名长度 + 1
+文件名前光标位置_1 equ 第一条文件名长度 + 2
+搜索iSO9660文件或文件夹的函数栈帧大小 equ 文件名前光标位置_1 + 0
 
-cmp al,'/'
-jnz 计算文件或文件夹名长度
+;From 表10 ファイルフラグ
+cmp ch,0FFh
+jnz 属性转译_1
 
-得到文件或文件夹名长度:
-dec si;lodsb指令已经把结束符也算进去了所以你需要减1
-sub si,[esp+1];结束位置减去起始位置得到长度
-mov [esp+3],si;第2项文件名长度
-xchg cx,si
+mov [bp - 需要的条目属性_1],ch
+jmp 属性转译结束_1;全部属性都要因此无需转译属性
+
+属性转译_1:
+mov dx,0
+test ch,0000_0001b;需要文件还是文件夹
+jz 需要文件_1
+
+or dl,0000_0010b;目标条目是1则表示文件夹
+
+需要文件_1:
+or dh,0000_0010b;保留第2位表示文件还是文件夹
+mov [bp - 需要的条目属性_1],dx
+
+属性转译结束_1:
+mov si,bx
+mov ah,cl;保留CL
+mov ch,0
 call UTF8字符串内的小写字母转成大写
-cmp word[esp+3],8
-jbe 不需要短文件名;小于等于则跳转
+cmp word[bp - 第一条文件名长度],8
+jbe 不用截断成短文件名;小于等于则跳转
 
-;将会修改al，bh，cx，dl，si，di寄存器
-mov di,缓存区_2
-mov cx,9
+;将会修改AX，CX，Si，Di寄存器
+;把文件名截断成8.3格式
+mov di,bx
+mov cl,ah
+add di,cx;指向字符串结尾
+mov al,'.';句号。
+
+;继续对比字符:
+std;倒序
+repnz scasb
 cld;正序
+jz 有句号
+
+;没有句号
+mov si,bx
+mov di,缓存区_2
+mov cl,8;只复制8个字符
 rep movsb
-mov di,缓存区_2;扫描复制过去的字符里的点
-mov al,'.'
-mov cx,9
-mov bh,0FFh;用于标记是否找遇到过点
-继续对比字符:
-repne scasb
-jnz 没有遇到点
+mov byte[bp - 第二条文件名长度],8
+jmp 不用截断成短文件名;短文件名截断完成
 
-mov bh,cl
+有句号:
+inc cl;repnz指令会多执行一次，先读取下一次的字符再根据这次的结果决定是否继续执行
+sub ah,cl;总长度减去剩余长度得到已扫描的长度也就是后缀名长度
+cmp cl,8;先判断字符串剩余的长度也就是文件名长度
+ja 截断文件名
 
-没有遇到点:
-cmp cl,0
-jnz 继续对比字符
+dec ah;repnz指令会多执行一次，注意句号
+cmp ah,3;再判断后缀名长度
+ja 截断后缀名
 
-cmp bh,0FFh
-jnz 有点
+jmp 不用截断成短文件名;不要截断后缀名
 
-mov byte[esp+0],8;先设置 第1项文件名长度 默认长度
-;没点则继续扫描源字符内的点，如果遇到第一个点后停止扫描并复制点后面的字符大于三个就只复制三个，小于或等于三则全部复制
-mov di,9;总长度
-mov cx,[esp+3];第2项文件名长度
-sub cx,di;减去已扫描的长度得到剩余需要扫描的长度
-add di,[esp+1];加上 第2项文件名位置 起始得到剩下部分的位置
-repne scasb;遇到点则停止
-jnz 不需要短文件名;没点
+截断文件名:
+mov cl,8
 
-mov si,di;将点后的字符复制进缓存区
-mov di,缓存区_2+9;不能覆盖之前复制进去的字符
-mov byte[di-1],'.';写入1个点
-mov bh,9;点前字符长度
-jmp 复制后缀名
-
-有点:;如果有点则复制点后面的字符大于3个就只复制3个，小于或等于3则全部复制
-mov dl,9;总长度
-sub dl,bh;减去剩余部分得到已扫描的长度
-mov bh,dl;同时也是点前字符长度
-mov cl,[esp+3];第2项文件名长度 CX高位已被清空
-sub cl,dl;减去已扫描的长度得到需要复制的长度
-movzx di,dl;缓存区内偏移
-add di,缓存区_1;加上缓存区地址得到需要复制到的位置
-movzx si,dl;第2项文件名内偏移
-add si,[esp+1];加上 第2项文件名位置 起始得到剩下部分的位置
-
-复制后缀名:
-cmp cl,3
-jbe 复制全部后缀名;大于等于则跳转
-
-mov cl,3
-
-复制全部后缀名:
-add bh,cl;+点后字符长度
+截断后缀名:
+mov si,bx
+mov di,缓存区_2
+mov al,cl;保留CL
 rep movsb
-mov [esp+0],bh;第1项文件名长度
+and ah,00000011b;只保留两个比特位最大可表示数字3，刚好是短文件名的最大长度
+inc ah;增加一个字符把句号也复制过来
+mov cl,ah
+add al,ah
+rep movsb
+mov byte[bp - 第二条文件名长度],al
 
-不需要短文件名:
+不用截断成短文件名:
 call 获取光标位置
-mov [esp+5],dx;刷新 光标位置
-mov eax,ebp
-mov cx,[u16_1]
-mov dl,bl;属性
+push dx;刷新 光标位置
+mov bx,[bp - iSO9660文件名条目扇区缓冲区结束]
+mov ch,0;帮下面清空CX高位
 
 继续对比:
-call iSO9660获取一个项
+call 获取一个iSO9660文件名条目
 jc 项已完结
 
-mov [u32_1],eax;iSO9660数据长度
-mov ebp,ecx;逻辑扇区号
-mov dx,[esp+5];光标位置
-movzx cx,byte[esp+7];上1项字符长度
-call 重置光标并清除前文件名
-mov [esp+7],bl;刷新 上1项字符长度
-movzx cx,bl;字符长度
-movzx dx,bl
-mov si,di;字符地址
-call 显示项名
+;mov bh,0;BH已被重置光标并清除前文件名置零
+cmp word[si + bx - 2],';1'
+jnz 已减去版本号;没有版本号则不用减去
+
+sub bl,2
+ja 已减去版本号
+
+add bl,2;文件名长度错误，因此减去的是文件名而不是版本号，要把文件名加回来
+
+已减去版本号:
+mov cl,bl
+call 不清空BH的显示项名
+mov cl,byte[bp - 上一条目的字符长度]
+sub cl,bl
+mov [bp - 上一条目的字符长度],bl;刷新 上1项字符长度
+jbe 上一项名已被当前项名覆盖完了;因此无需清除项名
+
+mov ax,0a00h + ' ';mov al,' ';用空格覆盖;mov ah,10;功能号，重复显示一个字符
+;mov bh,0;窗口页码
+int 10h
+
+上一项名已被当前项名覆盖完了:
+mov ah,bl;保留BL
+mov dh,[bp - 需要的条目属性_1]
 mov bx,di
-cmp dx,[esp+0];第1项文件名长度
+cmp dh,0FFh;任何属性的条目都要
+jz 属性相同;无需对比目标属性了
+
+and dl,[bp - 需要的属性位掩码];清空不需要的位
+cmp dl,dh
+jnz 继续对比
+
+属性相同:
+cmp ah,[bp - 第一条文件名长度]
 jnz 尝试第二项;第一项名长不匹配
 
-mov cx,dx;字符长度
-mov si,缓存区_2;第1项文件名位置
+mov cl,ah;字符长度
+lea si,[bx + 33];字符地址
+call UTF8字符串内的小写字母转成大写
+mov cl,ah
+mov si,[bp - 第一条文件名位置]
+lea di,[bx + 33];字符地址
 rep cmpsb
 jz 项名相同
 
 尝试第二项:
-cmp dx,[esp+3];第2项文件名长度
+cmp ah,[bp - 第二条文件名长度]
 jnz 继续对比;文件名不一样长就不用对比了
 
-mov si,bx;字符地址
-mov cx,dx;字符长度
+mov cl,ah;字符长度
+lea si,[bx + 33];字符地址
 call UTF8字符串内的小写字母转成大写
-mov cx,dx;字符串长度
-mov si,[esp+1];第2项文件名位置
-mov di,bx;字符地址
+mov cl,ah
+mov si,缓存区_2;第2项文件名位置
+lea di,[bx + 33];字符地址
 rep cmpsb
 jnz 继续对比
 
 项名相同:
-and byte[标志],11111110b;触发重置
-mov ecx,ebp;逻辑扇区号
-mov eax,[u32_1];iSO9660数据长度
-add sp,8
-clc
+mov ax,[bx + 2];逻辑扇区号低16位
+mov si,[bx + 2 + 2];逻辑扇区号高16位
+mov dx,[bx + 10];数据长度低16位
+mov di,[bx + 10 + 2];数据长度高16位
+mov sp,bp
+pop bp
+;clc;CF标志位已被CMPSB指令置零
 ret
 
 项已完结:
-mov dx,[esp+5];光标位置
-mov cx,[esp+7];上一项字符长度
+mov dx,[bp - 文件名前光标位置_1]
+mov cl,byte[bp - 上一条目的字符长度]
 call 重置光标并清除前文件名
-add sp,8
+mov sp,bp
+pop bp
 stc
 ret
 
@@ -982,7 +1044,7 @@ ret
 
 ;将会修改EAX，EBX，CX，DX，Si，Di寄存器
 ;输入EAX数据长度，ECX逻辑扇区号，DL属性，Si文件名位置
-;输出EAX数据长度，ECX逻辑扇区号
+;输出AX逻辑扇区号低16位，Si逻辑扇区号高位16位，DX数据长度低16位，Di数据长度高16位
 Joliet的检索文件或文件夹:
 sub sp,4
 ;mov byte[esp+0],文件或文件夹名长度
@@ -1030,7 +1092,12 @@ repe cmpsw
 jnz 对比下一个项_1
 
 mov eax,[u32_1]
-mov ecx,ebp
+mov dx,ax
+shr eax,16
+mov di,ax
+mov ax,bp;逻辑扇区号
+shr ebp,16
+mov si,bp
 and byte[标志],11111110b;触发重置
 add sp,4
 clc
@@ -1083,7 +1150,7 @@ ret
 
 
 
-;将会修改AX，BH寄存器
+;将会修改AX，BH，CX寄存器
 ;输入CL覆盖长度，DX光标位置
 ;输出
 重置光标并清除前文件名:
@@ -1100,11 +1167,13 @@ ret
 
 
 ;AX，BH，CX，Si寄存器将会被修改
-;输入CX字符长度，Si项名
+;输入CL字符长度，Si项名
 ;输出
 显示项名:
-mov ah,14;功能号
 mov bh,0;页码
+
+不清空BH的显示项名:
+mov ah,14;功能号
 
 循环显示完项名:
  lodsb
@@ -1223,122 +1292,88 @@ ret
 ; stc
 ; ret
 
-属性表:
-iSO9660属性表:;
-dw iSO9660文件
-dw iSO9660文件夹
-
-db 1;长度
-iSO9660文件:;
-db 0;属性
-
-db 1;长度
-iSO9660文件夹:;
-db 2;属性
 
 
-FiD属性表:
-dw FiD文件
-dw FiD文件夹
-
-db 1;长度
-FiD文件:
-db 0
-
-db 2;长度
-FiD文件夹:
-db 2h
-db 10h
-
-
-
-;将会修改EAX，EBX，ECX，DX，Si，Di寄存器
-;输入EAX数据长度，ECX逻辑扇区号，dL第一次需要属性
-;输出EAX数据长度，ECX逻辑扇区号，BL字符长度，Di字符地址
+;将会修改AX，BX，CX，DX，Si，Di寄存器
+;输入BX缓冲区偏移指针，BP调用者的栈帧，BP - 2 = 文件名表大小高16位，BP - 4 = 文件名表大小低16位，BP - 6 = iSO9660文件名条目扇区缓冲区结束
+;输出Di扇区内数据偏移，DL文件名条目的属性，BL字符长度，Si字符地址
 ;test指令示例test al,0000_0100b;被测试位 =0则ZF =1
+获取一个iSO9660文件名条目:
 Joliet获取一个项:
-mov bx,[扇区内数据位置]
-test byte[标志],1b
-jnz 获取项_1
+mov cl,[bp - 上一iSO9660文件条目长度]
 
-or byte[标志],1b;取消下次重置
-mov [文件属性号],dl
-mov [逻辑扇区号],ecx
-mov edx,0;清空除法高位
-movzx ecx,word[实际扇区大小]
-div ecx;edx高：eax低÷ecx=eax…edx
-cmp dx,0
-jz 不增加一个扇区_3
+减去一个iSO9660文件条目:
+sub [bp - 文件名表大小低16位],cx
+ja 文件条目表大小低位还没用完
 
-inc ax;超出一个字节都需要读完整个扇区
+jnz 不设置退出循环的借位_1
 
-不增加一个扇区_3:
-mov [循环次数],ax
-mov eax,[逻辑扇区号]
-mov ebx,缓存区_1
-call 读扇区
-inc dword[逻辑扇区号];预先推到下一个扇区
-movzx ax,byte[bx];跳过一个.目录
-add bx,ax
-mov al,[bx];跳过一个..目录
-add bx,ax
-mov si,0;刚来时不能推进项
+cmp word[bp - 文件名表大小高16位],0;如果低位为零就要手动判断高位是否为零，因为没有产生借位
+jnz 不设置退出循环的借位_1;不为零则跳过设置进位
 
-属性不同_1:
-add bx,si;加上下面获取到的下一个项的长度以推进到下一个项
+stc;如果高位为零则设置借位到下面减去借位时也会借位以跳出循环
+
+不设置退出循环的借位_1:
+sbb word[bp -文件名表大小高16位],0
+jc iSO9660文件名条目已耗尽
+
+文件条目表大小低位还没用完:
+add bx,cx;上一条目的起始加上一条目的长度等于下一条目的起始
+cmp bx,[bp - iSO9660文件名条目扇区缓冲区结束]
+jae 读取下一个扇区_1
 
 获取项_1:
-mov ax,缓存区_1
-add ax,[实际扇区大小]
-cmp bx,ax;iSO9660的项不会跨越扇区，如果当前扇区不足以保存本项，则本项会被推到下一个扇区，当前扇区的剩余空间则会用零填充
-jb 还可以取项_1
+cmp byte[bx],0;iSO9660的文件名条目不会跨越扇区，如果当前扇区不足以保存本项，则本项会被推到下一个扇区，当前扇区的剩余空间则会用零填充
+jnz 还可以取项_1;没有项了
+
+mov cx,[bp - iSO9660文件名条目扇区缓冲区结束]
+sub cx,bx
+jbe 读取下一个扇区_1;缓冲区偏移指针越界或指向结束则直接读取下一个扇区
+
+cmp cx,34 - 1;一个没有文件名的条目长度
+mov byte[bp - 上一iSO9660文件条目长度],0;注意此条目的长度已被立即减去，当下次循环时不要减去已减过的条目
+jb 减去一个iSO9660文件条目;余下的空间不足以存放一个条目，因此无需搜索剩下的空间
+
+mov dx,cx;保留CX
+mov di,bx
+mov al,0
+repz scasb
+jnz 填充的空间后还有条目;不应该发生这种情况，条目必须紧挨着一条接一条中间不能有空隙
+
+mov cx,dx
+jmp 减去一个iSO9660文件条目
+
+填充的空间后还有条目:
+sub dx,cx;总大小减去已剩余大小等于空块大小
+mov cx,dx
+jmp 减去一个iSO9660文件条目
 
 读取下一个扇区_1:
-cmp word[循环次数],0
-jz 已读完所有扇区_1
-
-mov ebx,缓存区_1
-mov eax,[逻辑扇区号]
-call 读扇区
-inc dword[逻辑扇区号]
-dec word[循环次数]
+mov bx,缓存区_1;环回到缓冲区起始
+mov dh,1
+mov ax,[bp - 文件名表扇区号低16位]
+mov si,[bp - 文件名表扇区号高16位]
+call LBA48读扇区
+add word[bp - 文件名表扇区号低16位],1
+adc word[bp - 文件名表扇区号高16位],0
 
 还可以取项_1:
-movzx si,byte[bx];本项长度
-cmp si,0
-jz 读取下一个扇区_1;没有项了
-
-mov al,[bx+25]
-mov di,iSO9660属性表
-call 对比文件属性
-jnz 属性不同_1
-
-add si,bx;推进到下一个项以便下次操作
-mov [扇区内数据位置],si
-mov ecx,[bx+2];逻辑扇区号
-mov eax,[bx+10];数据长度
-
-
-
-
-
-;movzx ax,byte[bx+32];判断结束符
-;lea si,[bx+33]
-;movzx cx,[bx+0]
-;add si,cx
-;sub si,34
-lea di,[bx+33]
-mov bl,[bx+32];文件或文件夹名长度
+mov dx,[bp - 文件名前光标位置_1]
+mov di,bx;保留BX
+;call 重置光标并清除前文件名
+mov ah,2;功能号
+mov bh,0;窗口页码
+int 10h
+mov bl,[di];本条目的长度
+mov [bp - 上一iSO9660文件条目长度],bl;更新上一条目的长度记录
+mov dl,[di + 25];本条目的属性
+mov bl,[di + 32];文件名长度
+lea si,[di + 33];文件名地址
 clc
+
+iSO9660文件名条目已耗尽:
+;stc;CF标志位已被SBB指令置1
 ret
-
-已读完所有扇区_1:
-and byte[标志],1111_1110b;下次则从头开始
-stc;设置进位
-ret
-
-jmp $
-
 
 
 
@@ -1484,18 +1519,41 @@ ret
 
 
 
+;将会修改AL，CX，Si寄存器
+;输入DS：Si字符串地址，CX字符串长度
+;输出
 UTF8字符串内的小写字母转成大写:;
  lodsb
  test al,1000_0000b
- jnz 不要转换_2
+ jz 尝试转化为大写字母;单字节编码_3
 
+ cmp al,110_00000b
+ jb 双字节编码_3
+
+ cmp al,1110_0000b
+ jb 三字节编码_3
+
+ ;cmp al,11110_000b
+ ;jb 四字节编码_3
+
+ 四字节编码_3:
+ inc si
+
+ 三字节编码_3:
+ inc si
+
+ 双字节编码_3:
+ inc si
+ jmp 不要转换_2
+
+ 尝试转化为大写字母:
  cmp al,'a'
  jb 不要转换_2;小于则跳转
 
  cmp al,'z'
  ja 不要转换_2;大于则跳转
 
- sub byte[si-1],32;
+ sub byte[si-1],32;小写字母到大写字母的差值
 
  不要转换_2:
 loop UTF8字符串内的小写字母转成大写
@@ -1522,7 +1580,7 @@ UTF8字符转OSTA16字符:
  cmp al,1110_0000b
  jb 三字节编码
 
- cmp al,11110_000b
+ ;cmp al,11110_000b
  ;jb 四字节编码
 
  四字节编码:;不支持大于0x10000的编码
@@ -1686,22 +1744,11 @@ ret
 
 
 ;将会修改CX，Di寄存器
-;输入AL属性，Di属性表
+;输入AL文件名条目的属性，Di属性表，BP调用者的栈帧，BP - 13 = 需要的属性
 ;输出
 ;ZF=0=属性不同
 对比文件属性:
-movzx cx,byte[文件属性号];顺便清空高位
-cmp cl,0FFh;任何属性的条目都要
-jz 属性相同;是的任何属性都要
 
-shl cl,1;×2
-add di,cx
-mov di,[di]
-movzx cx,byte[di-1];对比次数
-repne scasb
-
-属性相同:
-ret
 
 
 
@@ -1732,29 +1779,56 @@ ret
 
 
 
-;将会修改EAX，BX，CX，DL，Si，EDi，BP寄存器
-;输入EAX数据长度，ECX逻辑扇区号，EBX读到的位置
+;将会修改AX，BX，CX，DX，Si，Di，BP，ES寄存器
+;输入AX=LBA逻辑扇区号低16位，Si=LBA逻辑扇区号高位16位，扇区读取到ES段地址，扇区读取到BX偏移地址，DX要读取的数据长度低16位，Di要读取的数据长度高16位
 ;输出
 iSO9660读入扇区:
-mov edi,ecx;逻辑扇区号
-mov edx,0;清空除法高位
-movzx ecx,word[实际扇区大小]
-div ecx;edx高：eax低÷ebx=eax…edx
+cmp di,9
+ja 读取的文件大小超过512KB限制
+
+jnz 无需判断高16位是否为零_1;读取的文件大小不是刚好512KB
+
 cmp dx,0
-jz 不增加一个扇区_2
+ja 读取的文件大小超过512KB限制
 
-inc ax;超出一个字节都需要读完整个扇区
+无需判断高16位是否为零_1:
+mov cl,[数据长度转扇区数量的位移次数]
+;mov ch,0
+test dx,扇区大小 - 1;只要跨越了扇区哪怕只有一比特也要读完整个扇区
+jz 不需要多加一个文件扇区_2
 
-不增加一个扇区_2:
-mov cx,ax;循环次数
-mov bp,[实际扇区大小]
+add dx,扇区大小 - 1
+adc di,0;把加法进位CF加到Di，如果有的话
 
-继续读入:
- mov eax,edi;逻辑扇区号
- call 读扇区
- inc edi;推进到下一个扇区
- add bx,bp;增加一个扇区大小的偏移
-loop 继续读入
+不需要多加一个文件扇区_2:
+;位移计算文件的扇区数量_2:
+ shr di,1;右移一次，最低位移入CF
+ rcr dx,1;右移一次，CF移入最高位
+loop 不需要多加一个文件扇区_2;位移计算文件的扇区数量_2
+
+mov cx,dx;循环次数
+mov di,ax;保留逻辑扇区号低16位
+mov bp,si;保留逻辑扇区号高16位
+mov dh,1;读取的扇区数
+jmp 不推进到下一个段_2;插入循环
+
+读取文件扇区_1:
+ add di,1;推进到下一个扇区
+ adc bp,0
+ mov ax,di;逻辑扇区号
+ mov si,bp
+ add bx,[实际扇区大小];增加一个扇区大小的偏移
+ jnc 不推进到下一个段_2
+
+ mov dx,es
+ add dx,1000h
+ mov es,dx
+ mov dh,1;DX已被修改，重新赋值要读取的扇区数
+
+不推进到下一个段_2:
+ call LBA48读扇区
+loop 读取文件扇区_1
+
 ret
 
 
@@ -1858,7 +1932,7 @@ jc 读扇区错误
 ret
 
 读扇区错误:
-mov si,光盘读取错误
+mov si,消息_光盘读取错误
 jmp 打印并退出
 
 
@@ -1879,13 +1953,90 @@ mov bh,[u8_1]
 ret
 
 
-字符串_回车加换行 db 13
-字符串_换行 db 10,0
-NONE db 'None ',0
-消息光盘错误 db 13,10,'Disc error',0
-消息光盘处于仿真模式不可使用光盘文件系统 db 13,10,'Disc is in an emulation mode',0
-消息驱动器号不同 db 13,10,'Drive letters are different',0
-光盘读取错误 db 13,10,'Disc read error',0
+
+获取光盘参数时异常:
+mov si,消息_光盘错误
+jmp 打印并退出
+
+光盘处于仿真模式:
+mov si,消息_光盘处于仿真模式不可使用光盘文件系统
+jmp 打印并退出
+
+驱动器号不同:
+mov si,消息_驱动器号不同
+jmp 打印并退出
+
+没有读取到锚点卷描述符:
+mov si,消息_没有读取到锚点卷描述符
+jmp 打印并退出
+
+
+在MVDS里没有找到所需的描述符:
+cmp word[bp - 分区起始扇区号低16位],0
+jnz PD已读取
+ 
+cmp word[bp - 分区起始扇区号高16位],0
+jnz PD已读取
+
+mov si,消息_没有找到分区描述符
+call 打印
+
+PD已读取:
+cmp word[bp - 文件集描述符所在分区起始扇区号低16位],0
+jnz LVD已读取
+
+cmp word[bp - 文件集描述符所在分区起始扇区号高16位],0
+jnz LVD已读取
+
+mov si,消息_没有找到逻辑卷描述符
+
+LVD已读取:
+jmp 返回BiOS
+
+
+读取到错误的文件集描述符:
+mov si,消息_读取到错误的文件集描述符
+jmp 打印并退出
+
+没有搜索到文件LOADER:
+mov si,消息_回车加换行
+call 打印
+mov si,消息_NONE
+call 打印
+mov si,LOADER
+call 打印
+mov si,消息_回车加换行
+jmp 打印并退出
+
+;https://en.wikipedia.org/wiki/Conventional_memory
+读取的文件大小超过512KB限制:
+mov si,消息_读取的文件大小超过512KB限制
+jmp 打印并退出
+
+
+
+
+
+
+
+
+
+
+
+
+
+消息_回车加换行 db 13
+消息_换行 db 10,0
+消息_NONE db 'None ',0
+消息_光盘错误 db 13,10,'Disc error',13,10,0
+消息_光盘处于仿真模式不可使用光盘文件系统 db 13,10,'Disc is in an emulation mode',13,10,0
+消息_驱动器号不同 db 13,10,'Drive letters are different',13,10,0
+消息_光盘读取错误 db 13,10,'Disc read error',13,10,0
+消息_没有读取到锚点卷描述符 db 13,10,'No read found Anchor Volume Descriptor',13,10,0
+消息_没有找到分区描述符 db 13,10,'No secrch found Partition Descriptor',13,10,0
+消息_没有找到逻辑卷描述符 db 13,10,'No search found Logical Volume Descriptor',13,10,0
+消息_读取到错误的文件集描述符 db 13,10,'Read error File Set Descriptor',13,10,0
+消息_读取的文件大小超过512KB限制 db 13,10,'Read file size larger than 512KB limit',13,10,0
 
 二卷 db 2,'CD001';不一定在第二槽位
 Joliet标识 db '%/E',0;或是@或是C或是E
@@ -1901,10 +2052,37 @@ LOADER db 'LOADER.BIN',0
 标志 db 0
 文件属性号 db 0
 实际扇区大小 dw 0
+数据长度转扇区数量的位移次数 db 0
 扇区内数据位置 dw 0
 文件系统类型 db 0
 根目录逻辑扇区 dd 0
 根目录大小 dd 0
+
+属性表:
+iSO9660属性表:;
+dw iSO9660文件
+dw iSO9660文件夹
+
+db 1;长度
+iSO9660文件:;
+db 0;属性
+
+db 1;长度
+iSO9660文件夹:;
+db 2;属性
+
+FiD属性表:
+dw FiD文件
+dw FiD文件夹
+
+db 1;长度
+FiD文件:
+db 0
+
+db 2;长度
+FiD文件夹:
+db 2h
+db 10h
 
 u8_1 db 0
 u8_2 db 0
