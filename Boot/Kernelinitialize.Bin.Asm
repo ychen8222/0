@@ -124,13 +124,13 @@ mov edx,'PAMS';SMAP注意大小端
 ;4h ACPi NVS内存（操作系统需要在NVS会话之间保存此内存）
 ;其他尚未定义，视为保留
 int 15h
-jc 不支持eax0e820hint15h函数;第一次调用时设置进位意味着“不支持该功能”
+jc 不支持AXe820hint15h函数;第一次调用时设置进位意味着“不支持该功能”
 
 cmp eax,'PAMS';成功后， EAX必须赋值为“SMAP”
-jnz eax0e820hint15h函数发生错误
+jnz AXe820hint15h函数发生错误
 
 ;cmp ebx,0;EBX=0意味着列表只有1个（无价值的）条目
-;jz eax0e820hint15h函数发生错误
+;jz AXe820hint15h函数发生错误
 
 jmp 插入这里以保存第一次获取的条目
 
@@ -183,79 +183,238 @@ jmp 插入这里以保存第一次获取的条目
 jnz 继续获取内存布局
 
 结束获取内存布局:
+mov [esp + 普通的内存布局项结束],di
 ;mov eax,initialize起始;把实模式的地址转换为长模式的地址
 ;add ebx,eax
 ;add edi,eax
 ;add esi,eax
 ;add ebp,eax
 
+
+
+
+
 mov si,[esp + 普通的内存布局项起始]
-mov ax,di
-sub ax,si
-;除以20
-shr ax,2; ÷ 4
-mov dx,0
-mov cx,5
-div cx;DX高：AX低 ÷ CX = AX … DX
-mov cx,ax
-mov edx,0
-mov ebp,0
+cmp si,di
+jz 普通的内存布局表内没有条目
+
+
+
+mov dword[si],0
+mov dword[si + 4],0
+mov dword[si + 8],2
+mov dword[si + 8 + 4],0
+mov dword[si + 16],1
+add si,20
+
+mov dword[si],2
+mov dword[si + 4],0
+mov dword[si + 8],1
+mov dword[si + 8 + 4],0
+mov dword[si + 16],1
+add si,20
+
+mov dword[si],5
+mov dword[si + 4],0
+mov dword[si + 8],2
+mov dword[si + 8 + 4],0
+mov dword[si + 16],1
+add si,20
+
+mov dword[si],0
+mov dword[si+ 4],0
+mov dword[si + 8],0
+mov dword[si + 8 + 4],0
+mov dword[si + 16],0
+add si,20
+
+mov dword[si+0],0
+mov dword[si + 4],0
+mov dword[si + 8],0
+mov dword[si + 8 + 4],0
+mov dword[si + 16],0
+add si,20
+
+
+mov si,[esp + 普通的内存布局项起始]
+
+
+首次搜索空闲内存条目:
+ cmp dword[si + 16],1;判断此段内存的属性，1表示空闲的内存
+ jz 首次保存空闲内存条目
+
+ 不是可用的空闲内存段:
+ add si,8 + 8 + 4
+ cmp si,[esp + 普通的内存布局项结束]
+jnz 首次搜索空闲内存条目;循环以继续搜索空闲内条目，直到普通内存布局表耗尽
+
+mov si,字符串_没有搜索到空闲内存条目
+jmp 显示字符串后暂停处理器
+
+首次保存空闲内存条目:;第一次保存空闲内存条目时要做特殊处理，因为空闲内存表还未准备好且下面的代码会默认表内至少有一个条目
+mov eax,[si]
+mov ebx,[si + 4]
+dec sp;创建栈帧
+dec sp
+jmp 直接保存新的内存条目;不需要写完所有的赋值代码，只需要复用循环内的代码即可
+
+空闲内存条目排序函数栈帧大小 equ 已排序的空闲内存表结束 + 2
+已排序的空闲内存表结束 equ 0;dw
 
 搜索并保存空闲内存条目:
- cmp dword[si + 8 + 8],1;判断此段内存的属性，1表示空闲的内存
+ cmp dword[si + 16],1;判断此段内存的属性，1表示空闲的内存
  jnz 不是可用的空闲内存段
 
- mov eax,[si];读取此段内存的起始地址
+ mov eax,[si];读取即将要保存的条目里的内存起始地址，现在EAX+EBX里保存了新一段内存的起始地址
  mov ebx,[si + 4]
- cmp edx,eax
- sbb ebp,ebx
- jnc 直接使用此段内存;这段内存没有跟前一段内存重叠
+ cmp ecx,eax;新的内存段起始地址跟旧的内存段结束地址进行判断，如果新的起始地址大于旧的结束地址则表示没有任何重叠现象
+ sbb edx,ebx
+ ja 直接保存新的内存条目;这段内存没有跟前面的内存有任何的重叠
 
-;已知现在本段内存跟前面的内存有交集，开始判断跟上一段的内存是否有重叠
-;此段内存已覆盖到前段内存
-;去除重叠部分
-;向上取整以对齐到最小页大小
-这段内存完全跟前面的内存重叠:
-mov dx,di;保留Di
-adc ebp,ebx;把上面SBB指令减去的值加回来，现在EDX + EBP里保存了前一条内存的结束地址
+ jz 把新的内存条目拼接到前一条目的尾部
 
-sub di,8 + 8
-cmp eax,[di];EAX + EBX里保存了有重叠的内存起始地址，也就是我们要处理的条目的内存条目
-sbb ebx,[di + 4]
-jnc 带有错误的条目仅跟这段内存重叠;如果仅跟这一条目重叠那处理完这条目的部分以后就结束了
+ mov [esp + 已排序的空闲内存表结束],di
+ adc edx,ebx;把上面SBB指令减去的值加回来，目前EDX+EBP里保存了旧内存的结束地址
+ add eax,[si + 8];起始地址加上长度，现在EAX+EBX里保存了有重叠的内存结束地址
+ adc ebx,[si + 8 + 4]
+ jmp 插入重叠判断循环以跳过不可在首次执行的减值恢复
 
-;结束减起始你将会获得它俩之间的差值也就是间距，如果结束小于起始你减的话你将会获得负数这是没有意义的
-adc ebx,[di + 4];把上面SBB指令减去的值加回来
-add eax,[di + 4 + 4]
-adc ebx,[di + 4 + 4 + 4]
+    判断是否与下一个条目存在重叠:
+     adc ebx,[di + 4];把下面SBB指令减去的值加回来
+
+     插入重叠判断循环以跳过不可在首次执行的减值恢复:
+     sub di,8 * 2
+     cmp di,[esp + 空闲内存条目排序函数栈帧大小 + 普通的内存布局项结束]
+     jb 向后移动内存条目以腾出位置保存条目;已排序的空闲内存表已完结了
+
+     cmp eax,[di];有重叠的内存结束地址跟旧条目里的内存起始地址进行判断，如果小于此条目里的起始地址则表示与此条目没有任何关联
+     sbb ebx,[di + 4]
+    jb 判断是否与下一个条目存在重叠;如果仅跟这一条目重叠那处理完这条目的部分以后就结束了！
+
+ adc ebx,[di + 4];把上面SBB指令减去的值加回来
+ ;结束减起始你将会获得它俩之间的差值也就是间距，如果结束小于起始你减的话你将会获得负数这是没有意义的
+ mov ecx,[di]
+ mov edx,[di + 4]
+ add ecx,[di + 8];起始地址加上长度，现在ECX+EDX里保存了旧条目的内存结束地址
+ adc edx,[di + 8 + 4]
+ cmp ecx,[si];使用此旧条目的结束地址跟有重叠的起始地址进行判断，如果有重叠的起始地址小于旧条目内的结束地址则表示与此条目重叠
+ sbb edx,[si + 4]
+ jb 向前移动内存条目以腾出位置保存条目;有重叠的内存条目不与任何旧条目重叠
+
+ adc edx,[di + 4];把上面SBB指令减去的值加回来
+ sub eax,ecx;使用有重叠的结束地址减去旧的结束地址等于重叠地址超出旧地址的部分
+ sbb ebx,edx
+ jbe 有重叠的内存段没有比旧的内存向后多出一些
+
+ add [di + 8],eax;把超出的长度加到旧条目里的结尾处
+ adc [di + 8 + 4],ebx
+
+ 有重叠的内存段没有比旧的内存向后多出一些:
+ mov ecx,[si];读取起始地址，现在ECX+EDX里保存了有重叠条目里的起始地址
+ mov edx,[si + 4]
+ sub ecx,[di];使用有重叠条目的起始地址跟旧条目里的起始地址进行判断，如果是大于则说明存在有重叠的地址超出了旧条目开头以外的部分，现在我们把它拼接到旧条目的开头处
+ sbb edx,[di + 4]
+ jbe 有重叠的内存条目已处理完毕;开头处没有重叠以外的部分，所以条目已经处理完毕了
+
+ sub [di],ecx;把超出的长度加到旧条目里的开头处
+ sbb [di + 4],edx
+ add [di + 8],ecx
+ adc [di + 8 + 4],edx
+
+    sub di,8 * 2;首个条目必须特殊处理
+    cmp di,[esp + 空闲内存条目排序函数栈帧大小 + 普通的内存布局项结束]
+    jb 有重叠的内存条目已覆盖所有更旧的条目;已排序的空闲内存表已完结了
+
+    mov eax,[di + 8 * 2];预先读取循环内的常量，现在EAX+EBX里保存了上一条目里内存的起始地址
+    mov ebx,[di + 8 * 2 + 4]
+    lea si,[di + 8 * 2];保留上一条目及其后续的起始地址
+
+    检查是否有波及到更旧的内存条目:
+     ;mov ecx,[di]
+     ;mov edx,[di + 4]
+     ;add ecx,[di + 8];起始地址加上长度，现在EDX+EBP里保存了更旧的条目里的内存结束地址
+     ;adc edx,[di + 8 + 4]
+     ;cmp ecx,eax;使用更旧的条目里的内存结束地址跟上一条目里的内存起始地址进行判断，如果不变负数则说明两段内存有重叠，现在我们把它拼接到上一条目的开头处
+     ;sbb edx,ebx
+	 cmp eax,[di]
+	 sbb ebx,[di + 4]
+     jb 有重叠的内存条目已处理完毕;没有与更旧的内存条目重叠
+
+     sub eax,[di];使用上一条目里的内存起始地址减去更旧条目里的内存起始地址，如果不变负数则说明上一条目没有完全覆盖更旧的条目，现在我们把更旧的条目拼接到上一条目的开头处然后就停止检查前面的条目了
+     sbb ebx,[di + 4]
+     ja 更旧的条目已被上一条目完全覆盖
+
+     sub [si],edx;把更旧的条目多出的长度拼接到上一条目里的开头处
+     sbb [si + 4],ebp
+     add [si + 8],edx
+     adc [si + 8 + 4],ebp
+
+     有重叠的内存条目已覆盖所有更旧的条目:
+     add di,8 * 2;把上面倒退的指针推回去
+
+     把空闲内存表往前挪以移除所有被覆盖的条目:
+     mov cx,si
+     sub cx,[esp + 空闲内存条目排序函数栈帧大小 + 普通的内存布局项结束]
+     rep movsb
+	 mov eax,[di - 8 - 8]
+	 mov ebx,[di - 8 - 4]
+	 mov ecx,[di - 8]
+	 mov edx,[di - 4]
+     jmp 有重叠的内存条目已处理完毕
+
+     更旧的条目已被上一条目完全覆盖:
+     adc ebx,[di + 4];把上面SBB指令减去的值加回来
+     add eax,[di]
+     sub di,8 * 2
+     cmp di,[esp + 普通的内存布局项结束]
+    jb 检查是否有波及到更旧的内存条目;循环以检查所有条目
+
+    jmp 把空闲内存表往前挪以移除所有被覆盖的条目
 
 
+ 向后移动内存条目以腾出位置保存条目:;此条目是独立的，现在我们要给他腾出位置并单独保存
+ mov bx,si;保留Si
+ lea si,[di + 8 * 2];跳过此条目因为是大于此条目的结束地址才过来的所以不要移动此条目不能在此条目之前
+ mov cx,[esp + 普通的内存布局项结束]
+ add di,8 * 2 * 2;往前推进一个条目以空出一个间隙用于容纳有重叠的新条目
+ sub cx,si;结束地址减去起始地址等于两个地址之间的值也就是我们要复制的数据长度
+ mov bp,si;保留计算后的值
+ rep movsb
+ mov eax,[bx];把重叠的条目复制到腾出的位置里
+ mov edx,[bx + 4]
+ mov ecx,[bx + 8]
+ mov [bp],eax
+ mov [bp + 4],edx
+ mov eax,[bx + 8 + 4]
+ mov [bx + 8],ecx
+ mov [bp + 8 + 4],eax
+ mov si,bx;恢复Si
+jmp 不是可用的空闲内存段;插入完成，循环继续
 
 
-
-
-
-
-
-
-带有错误的条目仅跟这段内存重叠:
-
- 直接使用此段内存:
- mov edx,[si + 4 + 4];读取此段内存的长度
- mov ebp,[si + 4 + 4 + 4]
+ 直接保存新的内存条目:
+ mov ecx,[si + 8];读取此段内存的长度
+ mov edx,[si + 8 + 4]
  mov [di],eax;保存此段内存的起始地址
  mov [di + 4],ebx
- mov [di + 4 + 4],edx;保存此段内存的长度
- mov [di + 4 + 4 + 4],ebp
- add edx,eax;保留EAX
- add ebp,ebx;保留EBX
+ mov [di + 8],ecx;保存此段内存的长度
+ mov [di + 8 + 4],edx
+ 
+ 有重叠的内存条目已处理完毕:
+ add ecx,eax;保留EAX
+ adc edx,ebx;保留EBX
  add di,8 + 8
  
  不是可用的空闲内存段:
  add si,8 + 8 + 4
-loop 搜索并保存空闲内存条目;循环以创建空闲内存表
+ cmp si,[esp + 普通的内存布局项结束]
+jnz 搜索并保存空闲内存条目;循环以构筑空闲内存表
+;注意循环结束时下面的代码！！！！！！！！！！！！！！！！！！！！！！！！！！！
 
-
+把新的内存条目拼接到前一条目的尾部:
+add [si + 8],eax
+adc [si + 8 + 4],ebx
+jmp 不是可用的空闲内存段;拼接完成，循环继续
 
 
 ;构建Kernelinitialize.Bin的内存页表
@@ -623,7 +782,7 @@ jnz 循环处理内存布局项表
 
 
 
-
+;https://f.osdev.org/viewtopic.php?f=1&t=20445&start=0
 mov word[实模式代码的位置+initialize起始],fpfs
 jmp 切换到实模式
 
@@ -1347,6 +1506,8 @@ mov cx,bx;保留BX
 mov si,字符串_NONE
 call 实模式打印
 mov si,cx
+
+显示字符串后暂停处理器:
 call 实模式打印
 jmp 在实模式暂停处理器
 
@@ -1355,7 +1516,7 @@ jmp 在实模式暂停处理器
 
 ;如 ACPI 规范中所述，要查找 ACPI RSDT，请在 EBDA 中查找“RSD PTR”，如果不存在，则每 16 个字节搜索 0e0000h-0fffffh。它包含一个指向偏移量 12 处的 RSDT 的指针
 
-不支持eax0e820hint15h函数:
+不支持AXe820hint15h函数:
 ;80h 无效命令 (PC,PCjr)
 ;cmp ah,86h;不支持 86h 功能 (XT)
 mov si,字符串_eax0e820hint15hisnotsupported
@@ -1365,12 +1526,18 @@ jmp 在实模式暂停处理器
 字符串_eax0e820hint15hisnotsupported db 13,10,"BIOS doesn't support Int15h AX = E820h",0
 
 
-eax0e820hint15h函数发生错误:
+AXe820hint15h函数发生错误:
 mov si,字符串_eax0e820hint15hAnerroroccurred
 call 实模式打印
 jmp 在实模式暂停处理器
 
 字符串_eax0e820hint15hAnerroroccurred db 13,10,'EAX 0e820h int 15h An error occurred',0
+
+
+普通的内存布局表内没有条目:
+mov si,字符串_普通的内存布局表为空
+jmp 显示字符串后暂停处理器
+
 
 
 
@@ -1553,6 +1720,8 @@ jmp short 在实模式暂停处理器
 
 Message_NoCpuidSupport db 13,10,"The system doesn't support cpuid",0
 Message_NoLongMode db 13,10,'Long mode is not supported',0;ZealOS requires a 64-bit capable processor.
+字符串_普通的内存布局表为空 db 13,10,'The normal memory layout table is empty',0
+字符串_没有搜索到空闲内存条目 db 13,10,'No free memory entries were found',0
 字符串_间隔 db 13
 字符串_回车加换行 db 13
 字符串_换行 db 10,0
