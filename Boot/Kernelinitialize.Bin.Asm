@@ -4,9 +4,9 @@
 
 
 ;内存布局
-initialize起始 equ 100000h - 10h;～10FFeF=initialize.Bin
+initialize起始 equ 10_0000h - 10h;～10FFeF=initialize.Bin
 预分配数据结构起始 equ 0FFFFh * 10h + 0FFFFh + 1;=10FFeFh + 1
-MemoryManager起始 equ 200000h
+MemoryManager起始 equ 20_0000h
 
 
 ;硬件架构参数
@@ -33,58 +33,50 @@ mov si,字符串_间隔
 call 实模式打印
 
 
+;https://github.com/reactos/reactos/blob/master/boot/freeldr/freeldr/arch/realmode/amd64.S
 ;使用cpuid检查是否支持长模式，但在此之前先要检查是否支持cpuid
-pushfd;读扩展标志寄存器
-mov eax,[esp]
+pushfd;读取EFlag扩展标志寄存器
+mov ebx,[esp];保留EFlag寄存器
 xor dword[esp],10_0000000000_0000000000b;反转第22位
-popfd;写入扩展标志寄存器
+popfd;写入EFlag扩展标志寄存器
 pushfd
-cmp [esp],eax;扩展标志寄存器第21位可操作即可被置1或置0则代表支持cpuid指令
-jnz CheckForPAE
-
-add esp,4;删栈中EFlag数值，为什么不是还原，因为iD位并没有改变
-mov si,Message_NoCpuidSupport
-call 实模式打印
-jmp 在实模式暂停处理器
-
-CheckForPAE:
-mov [esp],eax;还原EFlag寄存器
+cmp [esp],ebx;扩展标志寄存器第21位可操作即可被置1或置0则代表支持cpuid指令
+lahf;把EFlag寄存器低8位保存到AH寄存器
+mov bl,ah
+mov [esp],ebx;还原EFlag寄存器
 popfd
+jz 不支持CPUiD指令;EFlag寄存器里的第21位没有被改写
+
+mov eax,1;https://www.geoffchappell.com/studies/windows/km/cpu/cpuid/00000001h/edx.htm
+cpuid
+test edx,10_0000b
+jz 没有MSR寄存器
+
+test edx,1000_0000b
+jz 不支持MCE异常检查
+
 mov eax,80000000h;检查cpuid所接受的最大功能号
 cpuid
-cmp eax,80000001h;
-jb NoLongMode;
+cmp eax,80000000h
+jbe CPUiD指令不支持0x80000000系列参数
 
 mov eax,80000001h
 cpuid
 bt edx,29;将EDX的第30比特放入CF标志位
-jc Success;Intel® 64 Intel® 64 Instruction Set Architecture
+jnc NoLongMode;Intel® 64 Intel® 64 Instruction Set Architecture
 
 
-NoLongMode:;
-mov si,Message_NoLongMode
-call 实模式打印
-jmp 在实模式暂停处理器
-
-Success:
-mov ecx,0c0000080h;EFER MSR
-rdmsr;将会修改EAX和EDX寄存器
-or eax,1_00000000b;启用长模式
-wrmsr
-mov eax,cr4;https://www.cnblogs.com/onetrainee/p/12738275.html
-or eax,1010_0000b;启用物理地址扩展PhysicalAddressExtension，PAE与A20门类似都是打开线路连接以支持更多的内存访问，PageGlobalEnabled全局页启用，PGE是启用全局页条目的支持开关，当修改CR3寄存器时那些带有全局属性的页条目将不会从TLB页表缓存中被移除和覆盖
-mov cr4,eax
 
 ;开始加载文件
 mov ah,12;功能号：打开文件或文件夹
-mov bx,路径_OSHAL
+mov bx,字符串_OSHAL
 int 0F5h
 jc 没有打开路径OSHAL
 
 ;mov si,字符串_回车加换行
 ;call 实模式打印
 mov ah,12;功能号：打开文件或文件夹
-mov bx,文件名_MEM
+mov bx,字符串_MEM
 mov ecx,MemoryManager起始 + 最小页大小
 int 0F5h
 jc 没有搜索到文件MemoryManager
@@ -94,7 +86,7 @@ jc 没有搜索到文件MemoryManager
 ;https://www.ctyme.com/intr/rb-1741.htm https://wiki.osdev.org/Detecting_Memory_(x86)
 ;构建内存布局表
 mov edi,_堆起始 + 普通的内存布局项与ACPi的内存布局项之间的间隔;顺便清空高位
-push word _堆起始 + 普通的内存布局项与ACPi的内存布局项之间的间隔;创建栈帧
+push di;创建栈帧
 push word _堆起始
 push di
 push di;内存映射表起始
@@ -191,60 +183,15 @@ mov [esp + 普通的内存布局项结束],di
 ;add ebp,eax
 
 
-
-
-
 mov si,[esp + 普通的内存布局项起始]
 cmp si,di
 jz 普通的内存布局表内没有条目
-
-
-
-mov dword[si],0
-mov dword[si + 4],0
-mov dword[si + 8],2
-mov dword[si + 8 + 4],0
-mov dword[si + 16],1
-add si,20
-
-mov dword[si],2
-mov dword[si + 4],0
-mov dword[si + 8],1
-mov dword[si + 8 + 4],0
-mov dword[si + 16],1
-add si,20
-
-mov dword[si],5
-mov dword[si + 4],0
-mov dword[si + 8],2
-mov dword[si + 8 + 4],0
-mov dword[si + 16],1
-add si,20
-
-mov dword[si],0
-mov dword[si+ 4],0
-mov dword[si + 8],0
-mov dword[si + 8 + 4],0
-mov dword[si + 16],0
-add si,20
-
-mov dword[si+0],0
-mov dword[si + 4],0
-mov dword[si + 8],0
-mov dword[si + 8 + 4],0
-mov dword[si + 16],0
-add si,20
-
-
-mov si,[esp + 普通的内存布局项起始]
-
 
 首次搜索空闲内存条目:
  cmp dword[si + 16],1;判断此段内存的属性，1表示空闲的内存
  jz 首次保存空闲内存条目
 
- 不是可用的空闲内存段:
- add si,8 + 8 + 4
+ add si,20 * 1
  cmp si,[esp + 普通的内存布局项结束]
 jnz 首次搜索空闲内存条目;循环以继续搜索空闲内条目，直到普通内存布局表耗尽
 
@@ -258,6 +205,8 @@ dec sp;创建栈帧
 dec sp
 jmp 直接保存新的内存条目;不需要写完所有的赋值代码，只需要复用循环内的代码即可
 
+已排序的空闲内存表起始 equ 空闲内存条目排序函数栈帧大小 + 普通的内存布局项结束
+
 空闲内存条目排序函数栈帧大小 equ 已排序的空闲内存表结束 + 2
 已排序的空闲内存表结束 equ 0;dw
 
@@ -267,130 +216,141 @@ jmp 直接保存新的内存条目;不需要写完所有的赋值代码，只需
 
  mov eax,[si];读取即将要保存的条目里的内存起始地址，现在EAX+EBX里保存了新一段内存的起始地址
  mov ebx,[si + 4]
- cmp ecx,eax;新的内存段起始地址跟旧的内存段结束地址进行判断，如果新的起始地址大于旧的结束地址则表示没有任何重叠现象
- sbb edx,ebx
+ cmp ebx,edx;新的内存段起始地址跟旧的内存段结束地址进行判断，如果新的起始地址大于旧的结束地址则表示没有任何重叠现象
+ ja 直接保存新的内存条目;如果高位都大于那低位就不用判断了
+
+ jb 准备检查新的内存条目是否与旧的内存条目重叠
+
+ cmp eax,ecx
  ja 直接保存新的内存条目;这段内存没有跟前面的内存有任何的重叠
 
- jz 把新的内存条目拼接到前一条目的尾部
+ ;jz 把新的内存条目拼接到前一条目的尾部
 
+ 准备检查新的内存条目是否与旧的内存条目重叠:
  mov [esp + 已排序的空闲内存表结束],di
- adc edx,ebx;把上面SBB指令减去的值加回来，目前EDX+EBP里保存了旧内存的结束地址
  add eax,[si + 8];起始地址加上长度，现在EAX+EBX里保存了有重叠的内存结束地址
  adc ebx,[si + 8 + 4]
- jmp 插入重叠判断循环以跳过不可在首次执行的减值恢复
 
-    判断是否与下一个条目存在重叠:
-     adc ebx,[di + 4];把下面SBB指令减去的值加回来
+    判断是否与前一段内存重叠:
+     ;插入重叠判断循环以跳过不可在首次执行的减值恢复:
+     sub di,8 * 2;往后退一个旧条目
+     cmp di,[esp + 空闲内存条目排序函数栈帧大小 + 普通的内存布局项结束];移植本函数时注意这里有堆向下溢出的风险，但在本程序内永远也不会发生
+     jb 向后移动空闲内存条目以腾出位置保存条目;已排序的空闲内存表已完结了
 
-     插入重叠判断循环以跳过不可在首次执行的减值恢复:
-     sub di,8 * 2
-     cmp di,[esp + 空闲内存条目排序函数栈帧大小 + 普通的内存布局项结束]
-     jb 向后移动内存条目以腾出位置保存条目;已排序的空闲内存表已完结了
+     cmp ebx,[di + 4];有重叠的内存结束地址跟旧条目里的内存起始地址进行判断，如果小于此条目里的起始地址则表示与此条目没有任何关联
+     jb 判断是否与前一段内存重叠;;如果高位都大于那低位就不用判断了
 
-     cmp eax,[di];有重叠的内存结束地址跟旧条目里的内存起始地址进行判断，如果小于此条目里的起始地址则表示与此条目没有任何关联
-     sbb ebx,[di + 4]
-    jb 判断是否与下一个条目存在重叠;如果仅跟这一条目重叠那处理完这条目的部分以后就结束了！
+     cmp eax,[di]
+    jb 判断是否与前一段内存重叠;如果仅跟这一条目重叠那处理完这条目的部分以后就结束了！
 
- adc ebx,[di + 4];把上面SBB指令减去的值加回来
+
  ;结束减起始你将会获得它俩之间的差值也就是间距，如果结束小于起始你减的话你将会获得负数这是没有意义的
  mov ecx,[di]
  mov edx,[di + 4]
  add ecx,[di + 8];起始地址加上长度，现在ECX+EDX里保存了旧条目的内存结束地址
  adc edx,[di + 8 + 4]
- cmp ecx,[si];使用此旧条目的结束地址跟有重叠的起始地址进行判断，如果有重叠的起始地址小于旧条目内的结束地址则表示与此条目重叠
+ cmp ecx,[si];使用旧条目的结束地址跟有重叠的起始地址进行判断，如果有重叠的起始地址小于旧条目内的结束地址则表示与此条目重叠
+ mov ebp,edx;保留EDX
  sbb edx,[si + 4]
- jb 向前移动内存条目以腾出位置保存条目;有重叠的内存条目不与任何旧条目重叠
+ jb 向后移动空闲内存条目以腾出位置保存条目;有重叠的内存条目不与任何旧条目重叠
 
- adc edx,[di + 4];把上面SBB指令减去的值加回来
+ ;mov edx,ebp;恢复EDX
  sub eax,ecx;使用有重叠的结束地址减去旧的结束地址等于重叠地址超出旧地址的部分
- sbb ebx,edx
- jbe 有重叠的内存段没有比旧的内存向后多出一些
+ sbb ebx,ebp
+ jb 有重叠的内存段没有比旧的内存向后多出一些;JBE不可以用等于，因为如果高位都是零然后下面又是大于就没有触发借位，到判断高位时由于是等于则会触发JZ但下面低位并不等于
 
  add [di + 8],eax;把超出的长度加到旧条目里的结尾处
  adc [di + 8 + 4],ebx
 
  有重叠的内存段没有比旧的内存向后多出一些:
- mov ecx,[si];读取起始地址，现在ECX+EDX里保存了有重叠条目里的起始地址
- mov edx,[si + 4]
- sub ecx,[di];使用有重叠条目的起始地址跟旧条目里的起始地址进行判断，如果是大于则说明存在有重叠的地址超出了旧条目开头以外的部分，现在我们把它拼接到旧条目的开头处
- sbb edx,[di + 4]
- jbe 有重叠的内存条目已处理完毕;开头处没有重叠以外的部分，所以条目已经处理完毕了
+ mov ecx,[di];读取起始地址，现在ECX+EDX里保存了旧条目里的起始地址
+ mov edx,[di + 4]
+ sub ecx,[si];使用旧条目里的起始地址减去有重叠条目里的起始地址，如果不变负数则说有重叠的地址小于旧条目的地址存在超出了旧条目开头以外的部分，现在我们把它拼接到旧条目的开头处
+ sbb edx,[si + 4]
+ mov bx,di;保留Di
+ mov di,[esp + 已排序的空闲内存表结束];恢复Di
+ jb 有重叠的内存条目已跟倒数第一个旧内存条目合并;开头处没有重叠以外的部分，所以有重叠的条目已经处理完毕了
 
- sub [di],ecx;把超出的长度加到旧条目里的开头处
- sbb [di + 4],edx
- add [di + 8],ecx
- adc [di + 8 + 4],edx
+ jecxz 短跳转到有重叠的内存条目已跟倒数第一个旧内存条目合并;如果低位即ECX是零也跳转，因为低位没有产生借位而高位也是零的话就不会产生跳转
 
-    sub di,8 * 2;首个条目必须特殊处理
-    cmp di,[esp + 空闲内存条目排序函数栈帧大小 + 普通的内存布局项结束]
-    jb 有重叠的内存条目已覆盖所有更旧的条目;已排序的空闲内存表已完结了
+ sub [bx],ecx;把超出的长度加到旧条目里的开头处
+ sbb [bx + 4],edx
+ add [bx + 8],ecx
+ adc [bx + 8 + 4],edx
 
-    mov eax,[di + 8 * 2];预先读取循环内的常量，现在EAX+EBX里保存了上一条目里内存的起始地址
-    mov ebx,[di + 8 * 2 + 4]
-    lea si,[di + 8 * 2];保留上一条目及其后续的起始地址
+	mov di,bx;恢复Di
+    mov si,bx;保留上一条目及其后续的起始地址
+    mov eax,[bx];预先读取循环内的常量，现在EAX+EBX里保存了上一条目里内存的起始地址
+    mov ebp,[bx + 4]
 
     检查是否有波及到更旧的内存条目:
-     ;mov ecx,[di]
-     ;mov edx,[di + 4]
-     ;add ecx,[di + 8];起始地址加上长度，现在EDX+EBP里保存了更旧的条目里的内存结束地址
-     ;adc edx,[di + 8 + 4]
-     ;cmp ecx,eax;使用更旧的条目里的内存结束地址跟上一条目里的内存起始地址进行判断，如果不变负数则说明两段内存有重叠，现在我们把它拼接到上一条目的开头处
-     ;sbb edx,ebx
-	 cmp eax,[di]
-	 sbb ebx,[di + 4]
-     jb 有重叠的内存条目已处理完毕;没有与更旧的内存条目重叠
+     mov ebx,ebp;恢复EBX
 
-     sub eax,[di];使用上一条目里的内存起始地址减去更旧条目里的内存起始地址，如果不变负数则说明上一条目没有完全覆盖更旧的条目，现在我们把更旧的条目拼接到上一条目的开头处然后就停止检查前面的条目了
-     sbb ebx,[di + 4]
-     ja 更旧的条目已被上一条目完全覆盖
-
-     sub [si],edx;把更旧的条目多出的长度拼接到上一条目里的开头处
-     sbb [si + 4],ebp
-     add [si + 8],edx
-     adc [si + 8 + 4],ebp
-
-     有重叠的内存条目已覆盖所有更旧的条目:
-     add di,8 * 2;把上面倒退的指针推回去
-
-     把空闲内存表往前挪以移除所有被覆盖的条目:
-     mov cx,si
-     sub cx,[esp + 空闲内存条目排序函数栈帧大小 + 普通的内存布局项结束]
-     rep movsb
-	 mov eax,[di - 8 - 8]
-	 mov ebx,[di - 8 - 4]
-	 mov ecx,[di - 8]
-	 mov edx,[di - 4]
-     jmp 有重叠的内存条目已处理完毕
-
-     更旧的条目已被上一条目完全覆盖:
-     adc ebx,[di + 4];把上面SBB指令减去的值加回来
-     add eax,[di]
+     ;插入更旧的条目重叠判断循环以跳过不可在首次执行的减值恢复:
      sub di,8 * 2
-     cmp di,[esp + 普通的内存布局项结束]
-    jb 检查是否有波及到更旧的内存条目;循环以检查所有条目
+     cmp di,[esp + 空闲内存条目排序函数栈帧大小 + 普通的内存布局项结束]
+     jb 有重叠的内存条目已覆盖所有更旧的条目;空闲内存表已耗尽，所有旧条目均已被覆盖
 
-    jmp 把空闲内存表往前挪以移除所有被覆盖的条目
+	 cmp eax,[di];使用上一条目里的内存起始地址减去更旧条目里的内存起始地址，如果不变负数则说明上一条目没有完全覆盖更旧的条目，现在我们把更旧的条目拼接到上一条目的开头处然后就停止检查前面的条目了
+	 sbb ebx,[di + 4]
+    jb 检查是否有波及到更旧的内存条目;已完全覆盖此条目，尝试检查更前面的条目
 
+ ;并未完全覆盖这个更旧的条目:
+ mov ecx,[di];起始地址加上长度，现在ECX+EDX里保存了更旧的条目里的内存结束地址
+ mov edx,[di + 4]
+ add ecx,[di + 8]
+ adc edx,[di + 8 + 4]
+ sub ecx,eax;使用更旧的条目里的内存结束地址减去上一条目里的内存起始地址进行判断，如果不变负数则说明两段内存有重叠，现在我们把它拼接到上一条目的开头处
+ sbb edx,ebp
+ jb 有重叠的内存条目已覆盖所有更旧的条目;没有跟这个更旧的条目有任何的覆盖
 
- 向后移动内存条目以腾出位置保存条目:;此条目是独立的，现在我们要给他腾出位置并单独保存
+ xchg ecx,[di + 8];读取长度，现在ECX+EDX里保存了更旧条目里的内存长度
+ xchg edx,[di + 8 + 4]
+ sub ecx,[di + 8];使用更旧的段总长度减去已重叠的长度长度等于未重叠的长度
+ sbb edx,[di + 8 + 4]
+ sub [si],ecx;把更旧的条目多出的长度拼接到上一条目里的开头处
+ sbb [si + 4],edx
+ add [si + 8],ecx
+ adc [si + 8 + 4],edx
+ sub di,8 * 2;抵消下面的指针推进;jmp 把空闲内存表往前挪以丢弃所有被覆盖的条目
+
+ 有重叠的内存条目已覆盖所有更旧的条目:
+ add di,8 * 2;把上面倒退的指针推回去
+
+ ;把空闲内存表往前挪以丢弃所有被覆盖的条目:
+ mov cx,si
+ sub cx,[esp + 已排序的空闲内存表结束]
+ shr cx,2; ÷ 4最大化复制
+ rep movsd
+
+ 短跳转到有重叠的内存条目已跟倒数第一个旧内存条目合并:
+ jmp 读取最后一个条目里的内存起始地址和长度;有重叠的内存条目已处理完毕
+
+ 向后移动空闲内存条目以腾出位置保存条目:;此条目是独立的，现在我们要给它腾出位置并单独保存
  mov bx,si;保留Si
  lea si,[di + 8 * 2];跳过此条目因为是大于此条目的结束地址才过来的所以不要移动此条目不能在此条目之前
- mov cx,[esp + 普通的内存布局项结束]
- add di,8 * 2 * 2;往前推进一个条目以空出一个间隙用于容纳有重叠的新条目
+ mov cx,[esp + 已排序的空闲内存表结束]
  sub cx,si;结束地址减去起始地址等于两个地址之间的值也就是我们要复制的数据长度
  mov bp,si;保留计算后的值
- rep movsb
+ add di,8 * 2 * 2;往前推进一个条目以空出一个间隙用于容纳有重叠的新条目
+ shr cx,2; ÷ 4最大化复制
+ rep movsd
  mov eax,[bx];把重叠的条目复制到腾出的位置里
- mov edx,[bx + 4]
+ mov esi,[bx + 4]
  mov ecx,[bx + 8]
- mov [bp],eax
- mov [bp + 4],edx
- mov eax,[bx + 8 + 4]
- mov [bx + 8],ecx
- mov [bp + 8 + 4],eax
+ mov edx,[bx + 8 + 4]
+ mov ds:[bp],eax
+ mov ds:[bp + 4],esi
+ mov ds:[bp + 8],ecx
+ mov ds:[bp + 8 + 4],edx
  mov si,bx;恢复Si
-jmp 不是可用的空闲内存段;插入完成，循环继续
 
+ 读取最后一个条目里的内存起始地址和长度:
+ mov eax,[di - 8 - 8]
+ mov ebx,[di - 8 - 4]
+ mov ecx,[di - 8]
+ mov edx,[di - 4]
+ jmp 有重叠的内存条目已跟倒数第一个旧内存条目合并;插入完成，循环继续
 
  直接保存新的内存条目:
  mov ecx,[si + 8];读取此段内存的长度
@@ -399,52 +359,61 @@ jmp 不是可用的空闲内存段;插入完成，循环继续
  mov [di + 4],ebx
  mov [di + 8],ecx;保存此段内存的长度
  mov [di + 8 + 4],edx
+ add di,8 * 2;有重叠的内存条目已处理完毕:
  
- 有重叠的内存条目已处理完毕:
+ 有重叠的内存条目已跟倒数第一个旧内存条目合并:
  add ecx,eax;保留EAX
  adc edx,ebx;保留EBX
- add di,8 + 8
- 
- 不是可用的空闲内存段:
- add si,8 + 8 + 4
- cmp si,[esp + 普通的内存布局项结束]
-jnz 搜索并保存空闲内存条目;循环以构筑空闲内存表
-;注意循环结束时下面的代码！！！！！！！！！！！！！！！！！！！！！！！！！！！
 
-把新的内存条目拼接到前一条目的尾部:
-add [si + 8],eax
-adc [si + 8 + 4],ebx
-jmp 不是可用的空闲内存段;拼接完成，循环继续
+ 不是可用的空闲内存段:
+ add si,20 * 1
+ cmp si,[esp + 空闲内存条目排序函数栈帧大小 + 普通的内存布局项结束]
+jnz 搜索并保存空闲内存条目;循环以构筑空闲内存表
+
+mov [esp + 已排序的空闲内存表结束],di
+
+
+mov bx,[esp + 已排序的空闲内存表起始]
+cmp dword[bx + 4],0;第一个空闲内存条目里的内存起始地址高32位，如果高位都不是零那就不用接下来的操作了
+jnz 没有中断向量表
+
+cmp dword[bx],4 * 256;第一个空闲内存条目里的内存起始地址低32位
+jae 没有中断向量表
+
+mov dword[bx],4 * 256;保留实模式的中断向量表，不要让内存管理框架破环了BiOS的中断向量表
+
+没有中断向量表:
+
 
 
 ;构建Kernelinitialize.Bin的内存页表
-mov edi,_堆起始 + 最小页大小;顺便清空高位
-and di,1111_0000_00000000b;清空低12位
-add di,段地址乘数;别忘了实模式访问1mb以上内存需要偏移地址+10h
-;mov ebx,initialize起始
+add di,最小页大小
+and di,1111_0000_00000000b;清空Di低12位
+add di,段地址乘数;别忘了实模式访问1mb以上内存需要偏移地址+10h，上面的AND指令会清除+10h我们要把它补回去
 lea ebx,[edi + initialize起始];将CR3指向p4，PML4E
+;mov ebx,initialize起始
 mov cr3,ebx
 
 ;这是p1，PML4E
 lea eax,[edi + 最小页大小 + initialize起始];p2，PDPTE的位置
 or ax,111b;低12位是属性;应该使用1111内存页属性
-cld;正序
+;cld;正序
 stosd
 mov eax,0
-mov cx,最小页大小 / 4-1;-1因为上面已经stosd一次了
+mov cx,最小页大小 / 4 - 1;-1因为上面已经stosd一次了
 rep stosd
 
 ;这是p2，PDPTE
-lea eax,[edi+ 最小页大小 + initialize起始];p3，PDE的位置
-or ax,111b
+lea eax,[edi+ 最小页大小 + initialize起始 + 111b];p3，PDE的位置
+;or ax,111b
 stosd
 mov eax,0
-mov cx,最小页大小 / 4-1
+mov cx,最小页大小 / 4 - 1
 rep stosd
 
 ;这是p3，PDE
-lea eax,[edi + 最小页大小 + initialize起始];p4，PTE的位置
-or ax,111b
+lea eax,[edi + 最小页大小 + initialize起始 + 111b];p4，PTE的位置
+;or ax,111b
 stosd
 mov dword [di],0
 add di,4
@@ -453,89 +422,87 @@ stosd
 ;mov dword[di],0
 ;add di,4
 mov eax,0
-mov cx,最小页大小 / 4-3
+mov cx,最小页大小 / 4 - 3
 rep stosd
 
 ;这是p4，PTE
-mov eax,initialize起始+段地址乘数;物理地址的位置
-or ax,111b
-stosd;映射第1张页表到1mb处
-mov dword [di],0
-add di,4
-mov eax,最小页大小;开始正常映射内存，但由于第1张页表映射了其他地方，所以我们不能访问实模式的中断描述符表了
-or ax,111b
-mov cx,400000h / 最小页大小 * 8 / 4 - 2;前4mb的内存
+;or ax,111b
+mov dword[di],initialize起始 + 段地址乘数 + 111b;物理地址的位置;映射第1页内存到1MB处
+mov dword[di + 4],0
+add di,8
+mov eax,最小页大小 + 111b;开始正常映射内存，但由于第1张页表映射了其他地方，所以我们不能访问实模式的中断描述符表了
+;or ax,111b
+mov cx,20_0000h / 最小页大小 - 1;前2MB的内存，- 1因为上面已经STOSQ一次了
 
 构建本程序的物理地址项:
-stosd
-mov dword [di],0
-add di,4
-add eax,最小页大小
+ stosd
+ mov dword[di],0
+ add eax,最小页大小
+ add di,4
 loop 构建本程序的物理地址项
-
-mov dword[ContinueAddress],初始化内存管理进程+initialize起始
-jmp 切换到长模式
-
-
-
-
-
 
 
 ;构建MemoryManager的内存页表
-;jmp $
-bits 64
-初始化内存管理进程:
-mov word[实模式代码的位置+initialize起始],fpfs
-jmp 切换到实模式
-jmp $
-push bx
-push di
-push si
-push bp
-
-add edi,最小页大小
-and di,1111_0000_00000000b;清空低12位
-mov ebx,edi;p4，PML4E的地址
-
 ;这是p4，PML4E
-lea eax,[edi + 最小页大小];p3，PDPTE的地址
-or ax,111b;低12位是属性
+lea ebx,[edi + initialize起始];p4，PML4E的地址
+lea eax,[edi + initialize起始 + 最小页大小 + 111b];p3，PDPTE的地址
+;or ax,111b;低12位是属性
 ;cld;正序
-stosq
+stosd
 mov eax,0
-mov ecx,最小页大小 / 8-1;-1是因为上面已经stosq一次了
-rep stosq
+mov ecx,最小页大小 / 4 - 1;-1是因为上面已经STOSD1次了
+rep stosd
 
 ;这是p3，PDPTE
-lea eax,[edi + 最小页大小];p2，PDE的地址
-or ax,111b
-stosq
+lea eax,[edi + initialize起始 + 最小页大小 + 111b];p2，PDE的地址
+;or ax,111b
+stosd
 mov eax,0
-mov cx,最小页大小 / 8-1
-rep stosq
+mov cx,最小页大小 / 4 - 1
+rep stosd
 
 ;这是p2，PDE
-lea eax,[edi + 最小页大小];p1，PTE的地址
-or ax,111b
-stosq
+lea eax,[edi + initialize起始 + 最小页大小 + 111b];p1，PTE的地址
+;or ax,111b
+stosd
+mov dword[di],0
+add di,4
 add eax,最小页大小;第2张表的地址
-stosq
+stosd
 mov eax,0
-mov cx,最小页大小 / 8-2
-rep stosq
+mov cx,最小页大小 / 4 - 3;-3是因为上面已经STOSD3次了
+rep stosd
 
 ;这是p1，PTE
-mov eax,MemoryManager起始;物理内存的地址
-or ax,111b
-mov cx,10_0000h / 最小页大小 * 2;共映射2mb内存
+mov eax,MemoryManager起始 + 111b;物理内存的地址
+;or ax,111b
+mov cx,20_0000h / 最小页大小;共映射2MB内存
 
 构建内存管理进程的物理地址项:
- stosq
+ stosd
+ mov dword[di],0
  add eax,最小页大小
+ add di,4
 loop 构建内存管理进程的物理地址项
-;当光标到达行底时应该做点什么，比如准备更大的缓冲区以加快滚动
+;当光标到达行底时应该做点什么，比如准备更大的缓冲区以减少字符移动次数来加快滚动
 
+
+
+mov dword[ContinueAddress],初始化内存管理进程 + initialize起始
+mov ecx,0c0000080h;EFER MSR
+rdmsr;将会修改EAX和EDX寄存器
+or eax,1_00000000b;启用长模式
+wrmsr
+mov eax,cr4;https://www.cnblogs.com/onetrainee/p/12738275.html
+or eax,1010_0000b;启用物理地址扩展PhysicalAddressExtension，PAE与A20门类似都是打开线路连接以支持更多的内存访问，PageGlobalEnabled全局页启用，PGE是启用全局页条目的支持开关，当修改CR3寄存器时那些带有全局属性的页条目将不会从TLB页表缓存中被移除和覆盖
+mov cr4,eax
+jmp 切换到长模式
+
+
+bits 64
+初始化内存管理进程:
+;mov word[实模式代码的位置+initialize起始],fpfs
+;jmp 切换到实模式
 
 TSS项起始 equ 0;https://os.phil-opp.com/double-fault-exceptions/#the-ist-and-tss
 TSS预留的_1 equ TSS项起始 + 0
@@ -627,16 +594,18 @@ RFLAGS寄存器 equ RiP寄存器 + 8
 
 预分配数据结构结束 equ 0+8
 
-;初始化数据表结构
+
+;开始初始化数据表结构
+;输入EBX MemoryManager的内存页表
+jmp $
 mov eax,0;清空TSS项内的值
-mov cx,TSS项大小 * 2 / 8
+mov ecx,TSS项大小 * 2 / 8
 mov edi,TSS表起始
 rep stosq
+mov qword[TSS表起始 + RSPDPL0 + TSS项大小 * 0],0x10000;内核的栈地址起始
 
-mov qword[TSS表起始 + RSPDPL0 + TSS项大小 * 0],0x10000
-;jmp $
-;https://f.osdev.org/viewtopic.php?p=63014
-mov rax,TSS表起始 + TSS项大小 * 0
+;https://f.osdev.org/viewtopic.php?p=63014 https://www.yanfukun.com/read/ospinciple/gdtldttss
+mov rax,TSS表起始 + TSS项大小 * 0;TSS结构体的起始地址
 mov word[TSS指针表起始 + initialize起始 + 0],TSS项大小 - 1;长度 - 1以忽略后1字节，因为计算机是从0开始计数的
 mov [TSS指针表起始 + initialize起始 + 2],ax
 shr rax,16;把EAX高位移下来
@@ -650,6 +619,7 @@ mov dword[TSS指针表起始 + initialize起始 + 12],0;预留
 
 mov ax,TSS指针表起始 - 全局描述表起始
 ltr ax
+
 
 ;当表内中间的一项或多项条目释放后会产生空洞，需要移动内容来覆盖空洞，如果频繁移动会影响性能，我想可以新建另一个表来保存这些空洞的位置，下次写入表就直接往这些空洞里写，满一页合并这些内容以释放内存页
 mov byte[系统调用表起始 + 系统调用项属性 + 系统调用项大小 * 1],1;进程属性
@@ -671,7 +641,9 @@ mov qword[线程控制块起始 + RiP寄存器 + 线程控制块大小 * 2],4096
 
 ;mov [edi - 8 * 2],rax;调度中心进程控制表指针
 
-
+mov eax,ebx
+mov ebx,0
+call VMMU
 ;mov qword[edi + 1],rbx;内存管理的页表指针
 ;mov eax,edi
 ;sub eax,[线程控制表起始 + initialize起始]
@@ -712,8 +684,8 @@ mov qword[线程控制块起始 + RiP寄存器 + 线程控制块大小 * 2],4096
 
 ;jmp $
 
-mov word[实模式代码的位置+initialize起始],fpfs
-jmp 切换到实模式
+;mov word[实模式代码的位置+initialize起始],fpfs
+;jmp 切换到实模式
 
 
 
@@ -954,7 +926,7 @@ jmp $
 
 
 
-;当要煮东西时提前叫rn去洗东西
+
 
 
 
@@ -969,30 +941,66 @@ jmp $
 ;
 ;虽然在这里每层页表的名字都被简化了，但在处理器上每层页表都有自己的名字和故事
 ;rol指令把最高bit移入最低bit并复制1份进CF标志位
-VMMU:;手动实现mmu
-mov ebx,0;清空RBX寄存器
-;第1层页表
-rol rax,16 + 9
-mov bx,ax
-and bh,0000_0001;清空不需要的位因为页表内寻址只需要9位
-mov rcx,[rcx + rbx]
-;test cl,0;检查存在位
-;jz $
-;第2层页表
 
+;https://zhuanlan.zhihu.com/p/652983618 https://wiki.osdev.org/User:Foliagecanine/Paging_in_Long_Mode
+;将会修改RAX，RBX，RCX寄存器
+;输入RAX内存映射表起始，RBX虚拟地址
+;输出RBX物理地址
+VMMU:;手动实现MMU
+mov ecx,0;清空RCX寄存器
+;第1层页表
+rol rbx,16 + 9;把第1次需要的9位移下来
+and ax,1111_0000_00000000b;清空AX低12位
+mov cx,bx
+and ch,0000_0001b;清空不需要的位因为页表内寻址只需要9位
+mov rax,[rax + rcx]
+;test al,0;检查P存在位
+;jz $
+
+;test al,1000_0000b;检查PS页大小位
+;jz $
+
+;第2层页表
+and ax,1111_0000_00000000b;清空AX低12位
+rol rbx,9;把第2次需要的9位移下来
+mov cx,bx
+and ch,0000_0001b;清空不需要的位因为页表内寻址只需要9位
+mov rax,[rax + rcx]
+;test al,0;检查P存在位
+;jz $
+
+test al,1000_0000b;检查PS页大小位
+jnz $
 
 ;第3层页表
-mov rdx,rcx
-shr rdx,16
+and ax,1111_0000_00000000b;清空AX低12位
+rol rbx,9;把第3次需要的9位移下来
+mov cx,bx
+and ch,0000_0001b;清空不需要的位因为页表内寻址只需要9位
+mov rax,[rax + rcx]
+;test al,0;检查P存在位
+;jz $
 
+test al,1000_0000b;检查PS页大小位
+jnz $
 
 ;第4层页表
+and ax,1111_0000_00000000b;清空AX低12位
+rol rbx,9;把第4次需要的9位移下来
+mov cx,bx
+and ch,0000_0001b;清空不需要的位因为页表内寻址只需要9位
+mov rax,[rax + rcx]
+;test al,0;检查P存在位
+;jz $
 
+test al,1000_0000b;检查PS页大小位
+jnz $
 
-
-
-
-
+and ax,1111_0000_00000000b;清空AX低12位
+rol rbx,12;把第5次需要的12位移下来
+and bx,1111_11111111b;只保留BX低12位
+or ax,bx;把BX里的12位插进AX里
+ret
 
 
 
@@ -1499,6 +1507,31 @@ jmp 切换到长模式
 
 
 
+不支持CPUiD指令:
+mov si,Message_NoCpuidSupport
+call 实模式打印
+jmp 在实模式暂停处理器
+
+没有MSR寄存器:
+mov si,字符串_没有MSR寄存器
+jmp 显示字符串后暂停处理器
+
+不支持MCE异常检查:
+mov si,字符串_不支持MCE异常检查
+jmp 显示字符串后暂停处理器
+
+
+
+CPUiD指令不支持0x80000000系列参数:
+mov si,字符串_CPUiD指令不支持0x80000000系列参数
+jmp 显示字符串后暂停处理器
+
+NoLongMode:
+mov si,Message_NoLongMode
+call 实模式打印
+jmp 在实模式暂停处理器
+
+
 
 没有打开路径OSHAL:
 没有搜索到文件MemoryManager:
@@ -1523,21 +1556,18 @@ mov si,字符串_eax0e820hint15hisnotsupported
 call 实模式打印
 jmp 在实模式暂停处理器
 
-字符串_eax0e820hint15hisnotsupported db 13,10,"BIOS doesn't support Int15h AX = E820h",0
-
-
 AXe820hint15h函数发生错误:
 mov si,字符串_eax0e820hint15hAnerroroccurred
 call 实模式打印
 jmp 在实模式暂停处理器
 
-字符串_eax0e820hint15hAnerroroccurred db 13,10,'EAX 0e820h int 15h An error occurred',0
-
-
 普通的内存布局表内没有条目:
 mov si,字符串_普通的内存布局表为空
 jmp 显示字符串后暂停处理器
 
+栈大小已超出了实模式的寻址能力:
+mov si,字符串_栈大小已超出了实模式的寻址能力
+jmp 显示字符串后暂停处理器
 
 
 
@@ -1557,19 +1587,18 @@ jmp 显示字符串后暂停处理器
 ;mov ss,ax
 
 mov eax,cr0
-lgdt cs:[全局描述表指针];设置全局描述符表
 or eax,1000000000000000_0000000000000001b;通过同时启用PG分页和PE保护
 cli;拒收硬件中断
 mov cr0,eax;打开长模式并不意味着代码也会变成64位，他只是打开了长模式所支持的功能，你还需要加载64位代码段他才会按照64位编码进行解析代码，但如果你不打开长模式你就加载不了64位代码段
+lgdt cs:[全局描述表指针];设置全局描述符表
 jmp dword —64位代码段 - 全局描述表起始 : LongMode + initialize起始
 
 bits 64
 LongMode:
 mov eax,ss;顺便清空EAX高位
-movzx esp,sp;清空ESP高位
 shl eax,4; × 16
-lidt [—64位中断描述符表指针 + initialize起始];我迫切地需要知道发生什么错误
 add esp,eax;加上段地址，转换成平坦的栈形式值
+lidt [—64位中断描述符表指针 + initialize起始];我迫切地需要知道发生什么错误
 ;mov ax,0;长模式数据段 - 全局描述表起始
 ;mov ds,ax
 ;mov es,ax
@@ -1579,7 +1608,6 @@ add esp,eax;加上段地址，转换成平坦的栈形式值
 
 jmp qword[rel + ContinueAddress]
 
-ContinueAddress dd 0,0
 
 
 ;将会修改EAX，ECX，ESP，CS，iDTR，CR0，CR4寄存器
@@ -1623,6 +1651,7 @@ mov cr0,eax
 ;jmp initialize起始 / 段地址乘数 : InRealMode;清除预取队列并纠正CS
 
 InRealMode:
+lidt cs:[中断向量表指针];16位的中断描述符表
 ;mov ax,cs;initialize起始/16
 ;mov ds,ax
 ;mov es,ax
@@ -1630,20 +1659,16 @@ InRealMode:
 ;mov gs,ax
 ;mov ss,ax
 cmp esp,10FFeFh
-ja $;大于则跳转
+ja 栈大小已超出了实模式的寻址能力;大于则跳转
 
 cmp esp,0F0000h
 ja 不能使用单一段值;大于则跳转
 
-mov ecx,edx;保存EDX的值
-mov eax,esp;转换成16位实模式的栈值
-mov edx,0
-mov esp,10000h
-div esp;EDX高：EAX低 ÷ ESP = EAX … EDX
-shl ax,12;左移12位来补12个0，把1变成1000
-mov esp,edx;余数作为ESP偏移，顺便清空ESP高位
-mov ss,ax;商作为SS段
-mov edx,ecx;还原EDX的值
+mov eax,esp
+shr eax,4;转换成实模式的段值
+and ax,1111_0000_00000000b;清空AX低12位
+mov ss,ax
+movzx esp,sp;清空ESP高位
 jmp 栈已转换成实模式的
 
 不能使用单一段值:
@@ -1652,7 +1677,6 @@ mov ss,ax
 sub esp,0FFFF0h;减去段地址
 
 栈已转换成实模式的:
-lidt cs:[中断向量表指针];16位的中断描述符表
 sti;接收硬件中断
 jmp word[cs : 实模式代码指针]
 
@@ -1679,7 +1703,7 @@ mov bh,0;页码
 ;BL = 前景色（仅限图形模式）
 jmp 插入_3
 
-继续实模式的打印:;每个指令都很重要确保他们被正确执行
+继续实模式的打印:;每个指令都很重要确保它们被正确执行
  int 10h;中断号
 
  插入_3:
@@ -1718,8 +1742,13 @@ jmp short 在实模式暂停处理器
 
 常量起始:
 
-Message_NoCpuidSupport db 13,10,"The system doesn't support cpuid",0
+Message_NoCpuidSupport db 13,10,"The system doesn't support CPUiD",0
+字符串_没有MSR寄存器 db 13,10,'No MSR register',0
+字符串_不支持MCE异常检查 db 13,10,'MCE anomaly checking is not supported',0
+字符串_CPUiD指令不支持0x80000000系列参数 db 13,10,'The CPUiD instruction does not support parameters in the 0x80000000 series.',0
 Message_NoLongMode db 13,10,'Long mode is not supported',0;ZealOS requires a 64-bit capable processor.
+字符串_eax0e820hint15hisnotsupported db 13,10,"BIOS doesn't support Int15h AX = E820h",0
+字符串_eax0e820hint15hAnerroroccurred db 13,10,'EAX 0e820h int 15h An error occurred',0
 字符串_普通的内存布局表为空 db 13,10,'The normal memory layout table is empty',0
 字符串_没有搜索到空闲内存条目 db 13,10,'No free memory entries were found',0
 字符串_间隔 db 13
@@ -1734,8 +1763,9 @@ Message_NoLongMode db 13,10,'Long mode is not supported',0;ZealOS requires a 64-
 字符串_栈段故障 db 13,10,'Stack-Segment Fault',0
 字符串_一般性保护错误 db 13,10,'General Protection Fault',0
 字符串_页错误 db 13,10,'Page Fault',0
-路径_OSHAL db 'OPERATINGSYSTEM/HARDWAREABSTRACTIONLAYER/',0
-文件名_MEM db 'MEMORYMANAGER.BIN',0
+字符串_OSHAL db 'OPERATINGSYSTEM/HARDWAREABSTRACTIONLAYER/',0
+字符串_MEM db 'MEMORYMANAGER.BIN',0
+字符串_栈大小已超出了实模式的寻址能力 db 13,10,'The stack size has exceeded the addressing capability of real mode.',0
 
 
 全局描述表指针:;Global Descriptor Table
@@ -1772,6 +1802,8 @@ dq 0,0;由2个描述符组成的1个TSS描述符
 全局描述表结束:
 
 
+ContinueAddress dd 0,0
+
 
 调用状态跳转表起始:
 dq 空闲的调用 + initialize起始
@@ -1787,7 +1819,7 @@ dq 创建共享内存块 + initialize起始
 实模式代码的位置 dw 0
 
 中断向量表指针:;Interrupt Vector Table
-dw 256 * 4 - 1;实模式有256个中断项，每个项的长度为4byte，别忘了-1byte
+dw 4 * 256 - 1;实模式有256个中断项，每个项的长度为4byte，别忘了-1byte
 dd 0;起始于0结束于3FF
 
 —64位中断描述符表指针:
