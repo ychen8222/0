@@ -11,7 +11,6 @@ MemoryManager起始 equ 20_0000h
 
 ;硬件架构参数
 架构位宽 equ 16
-实模式段地址乘数 equ 16
 段地址乘数 equ 16
 最小页大小 equ 4096;4kb对齐～+20480
 
@@ -85,7 +84,7 @@ jc 没有搜索到文件MemoryManager
 
 ;https://www.ctyme.com/intr/rb-1741.htm https://wiki.osdev.org/Detecting_Memory_(x86)
 ;构建内存布局表
-mov edi,_堆起始 + 普通的内存布局项与ACPi的内存布局项之间的间隔;顺便清空高位
+mov edi,_堆起始 + 24;顺便清空高位
 push di;创建栈帧
 push word _堆起始
 push di
@@ -97,7 +96,7 @@ ACPi的内存布局项起始 equ 普通的内存布局项结束+2
 ACPi的内存布局项结束 equ ACPi的内存布局项起始+2
 构建内存布局表函数的栈帧 equ ACPi的内存布局项结束+2
 
-普通的内存布局项与ACPi的内存布局项之间的间隔 equ 20 * 4
+普通的内存布局项与ACPi的内存布局项之间的间隔 equ 24 * 4
 
 mov eax,0e820h;有些BiOS需要清空高位
 mov ebx,0;要获取的项的序号，项从0开始计数
@@ -111,7 +110,7 @@ mov edx,'PAMS';SMAP注意大小端
 ;+ 16，dd 该地址范围的类型
 ;系统内存映射地址类型的值：
 ;1h 普通内存，可供操作系统使用
-;2h 保留，不可用（例如系统ROM、内存映射设备）
+;2h 保留，不可用（例如系统ROM，内存映射设备）
 ;3h ACPi回收内存（读取ACPi表后可供操作系统使用）
 ;4h ACPi NVS内存（操作系统需要在NVS会话之间保存此内存）
 ;其他尚未定义，视为保留
@@ -128,7 +127,7 @@ jmp 插入这里以保存第一次获取的条目
 
 继续获取内存布局:
  mov eax,0e820h;EAX，ECX在每次int 0x15调用时都会被丢弃，因为EAX被BiOS赋值为用于验证是否成功的SMAP，ECX用于保存返回的项长度
- mov ecx,24 + 4;再次请求24个字节
+ mov ecx,20 + 4;再次请求24个字节
  int 15h
  jc 结束获取内存布局
 
@@ -147,25 +146,32 @@ jmp 插入这里以保存第一次获取的条目
  jz 获取下一项;忽略此条目
 
  mov ax,cx;保留CX
+ mov bp,di;保留Di
  mov si,di;把ACPi条目复制到前面的ACPi条目表中
  mov di,[esp + ACPi的内存布局项结束]
- rep movsb
- mov si,[esp + 普通的内存布局项起始]
- add [esp + ACPi的内存布局项结束],ax
- sub si,di;普通的内存布局项起始 - ACPi的内存布局项结束 = ACPi内存条目表与普通的内存条目表之间的间隙
- cmp si,ax;此间隙至少还要能容纳一个同当前一样大小的ACPi条目
- mov ax,[esp + 普通的内存布局项结束];预先读取Di寄存器所需的值
- jae 无需增大ACPi内存条目表与普通内存条目表之间的间隙
+ shr cx,2; ÷ 4最大化复制
+ rep movsd
+ add [esp + ACPi的内存布局项结束],ax;把ACPi内存布局表增大一个条目的大小
+ mov cx,[esp + 普通的内存布局项起始]
+ sub cx,di;普通的内存布局项起始 - ACPi的内存布局项结束 = ACPi内存条目表与普通的内存条目表之间的间隙
+ cmp cx,ax;此间隙至少还要能容纳一个同当前一样大小的ACPi条目
+ xchg di,bp;恢复Di
+ jae 获取下一项;无需增大ACPi内存条目表与普通内存条目表之间的间隙
 
- add si,di;把上面减开的再加回去，Si已指向普通的内存条目表起始
- mov cx,ax
- lea di,[si + 普通的内存布局项与ACPi的内存布局项之间的间隔]
- sub cx,si;普通的内存布局项结束 - 普通的内存布局项起始 = 普通的内存条目表大小
- rep movsb
-
- 无需增大ACPi内存条目表与普通内存条目表之间的间隙:
- mov di,ax
+ add bp,cx;把上面减去的值再加回去，BP已指向普通的内存条目表起始
+ mov si,di;Si已指向普通的内存条目表结束
+ mov cx,di
+ sub cx,bp;普通的内存布局项结束 - 普通的内存布局项起始 = 普通的内存条目表大小
+ add di,普通的内存布局项与ACPi的内存布局项之间的间隔 - 4
+ shr cx,2; ÷ 4最大化复制
+ sub si,4;修正差一错误
+ ;sub di,4;修正差一错误
+ std;倒序复制
+ rep movsd
+ cld;恢复正向
  sub di,20;抵掉下面的+20
+
+ ;无需增大ACPi内存条目表与普通内存条目表之间的间隙:
 
  保留普通的内存条目:
  add di,20;推进到下一个位置以不覆盖此本项，因为BiOS不会帮我们推进
@@ -205,10 +211,9 @@ dec sp;创建栈帧
 dec sp
 jmp 直接保存新的内存条目;不需要写完所有的赋值代码，只需要复用循环内的代码即可
 
-已排序的空闲内存表起始 equ 空闲内存条目排序函数栈帧大小 + 普通的内存布局项结束
-
 空闲内存条目排序函数栈帧大小 equ 已排序的空闲内存表结束 + 2
 已排序的空闲内存表结束 equ 0;dw
+已排序的空闲内存表起始 equ 空闲内存条目排序函数栈帧大小 + 普通的内存布局项结束
 
 搜索并保存空闲内存条目:
  cmp dword[si + 16],1;判断此段内存的属性，1表示空闲的内存
@@ -234,7 +239,7 @@ jmp 直接保存新的内存条目;不需要写完所有的赋值代码，只需
     判断是否与前一段内存重叠:
      ;插入重叠判断循环以跳过不可在首次执行的减值恢复:
      sub di,8 * 2;往后退一个旧条目
-     cmp di,[esp + 空闲内存条目排序函数栈帧大小 + 普通的内存布局项结束];移植本函数时注意这里有堆向下溢出的风险，但在本程序内永远也不会发生
+     cmp di,[esp + 已排序的空闲内存表起始];移植本函数时注意这里有堆向下溢出的风险，但在本程序内永远也不会发生
      jb 向后移动空闲内存条目以腾出位置保存条目;已排序的空闲内存表已完结了
 
      cmp ebx,[di + 4];有重叠的内存结束地址跟旧条目里的内存起始地址进行判断，如果小于此条目里的起始地址则表示与此条目没有任何关联
@@ -288,7 +293,7 @@ jmp 直接保存新的内存条目;不需要写完所有的赋值代码，只需
 
      ;插入更旧的条目重叠判断循环以跳过不可在首次执行的减值恢复:
      sub di,8 * 2
-     cmp di,[esp + 空闲内存条目排序函数栈帧大小 + 普通的内存布局项结束]
+     cmp di,[esp + 已排序的空闲内存表起始]
      jb 有重叠的内存条目已覆盖所有更旧的条目;空闲内存表已耗尽，所有旧条目均已被覆盖
 
 	 cmp eax,[di];使用上一条目里的内存起始地址减去更旧条目里的内存起始地址，如果不变负数则说明上一条目没有完全覆盖更旧的条目，现在我们把更旧的条目拼接到上一条目的开头处然后就停止检查前面的条目了
@@ -328,22 +333,28 @@ jmp 直接保存新的内存条目;不需要写完所有的赋值代码，只需
 
  向后移动空闲内存条目以腾出位置保存条目:;此条目是独立的，现在我们要给它腾出位置并单独保存
  mov bx,si;保留Si
- lea si,[di + 8 * 2];跳过此条目因为是大于此条目的结束地址才过来的所以不要移动此条目不能在此条目之前
  mov cx,[esp + 已排序的空闲内存表结束]
- sub cx,si;结束地址减去起始地址等于两个地址之间的值也就是我们要复制的数据长度
- mov bp,si;保留计算后的值
- add di,8 * 2 * 2;往前推进一个条目以空出一个间隙用于容纳有重叠的新条目
+ add di,8 * 2;跳过此条目因为是大于此条目的结束地址才过来的所以不要移动此条目不能在此条目之前
+ mov si,cx
+ sub cx,di;结束地址减去起始地址等于两个地址之间的值也就是我们要复制的数据长度
+ lea di,[si + 8 * 2];往前推进一个条目以空出一个间隙用于容纳有重叠的新条目
+ std;倒序复制
+ mov [esp + 已排序的空闲内存表结束],di;保留Di
  shr cx,2; ÷ 4最大化复制
+ sub si,4;修正差一错误
+ sub di,4;修正差一错误
  rep movsd
+ cld;恢复正向
  mov eax,[bx];把重叠的条目复制到腾出的位置里
  mov esi,[bx + 4]
  mov ecx,[bx + 8]
  mov edx,[bx + 8 + 4]
- mov ds:[bp],eax
- mov ds:[bp + 4],esi
- mov ds:[bp + 8],ecx
- mov ds:[bp + 8 + 4],edx
+ mov ds:[di - 8 - 8],eax
+ mov ds:[di - 8 - 4],esi
+ mov ds:[di - 8],ecx
+ mov ds:[di - 4],edx
  mov si,bx;恢复Si
+ mov di,[esp + 已排序的空闲内存表结束];恢复Di
 
  读取最后一个条目里的内存起始地址和长度:
  mov eax,[di - 8 - 8]
@@ -367,22 +378,44 @@ jmp 直接保存新的内存条目;不需要写完所有的赋值代码，只需
 
  不是可用的空闲内存段:
  add si,20 * 1
- cmp si,[esp + 空闲内存条目排序函数栈帧大小 + 普通的内存布局项结束]
+ cmp si,[esp + 已排序的空闲内存表起始]
 jnz 搜索并保存空闲内存条目;循环以构筑空闲内存表
 
 mov [esp + 已排序的空闲内存表结束],di
 
 
 mov bx,[esp + 已排序的空闲内存表起始]
+cmp bx,di
+jz 已排序的空闲内存表里没有条目
+
 cmp dword[bx + 4],0;第一个空闲内存条目里的内存起始地址高32位，如果高位都不是零那就不用接下来的操作了
-jnz 没有中断向量表
+jnz 空闲内存不是从0地址开始;BIOS提供的内存布局不符合传统的X86标准
 
-cmp dword[bx],4 * 256;第一个空闲内存条目里的内存起始地址低32位
-jae 没有中断向量表
+cmp dword[bx],0;第一个空闲内存条目里的内存起始地址低32位
+jnz 空闲内存不是从0地址开始
 
-mov dword[bx],4 * 256;保留实模式的中断向量表，不要让内存管理框架破环了BiOS的中断向量表
+mov esi,0
+mov edi,0
+mov eax,最小页大小 * 3;保留实模式的中断向量表，不要让内存管理框架破环了BiOS的中断向量表，保留后续两页给内核初始化程序使用，用于放置调度中心跳转代码
+mov edx,0
+call 从空闲内存表中分割和保留内存段
+jc 中断向量表所在的内存空间已被占用
 
-没有中断向量表:
+mov esi,60000h
+;mov edi,0
+mov eax,60000h + 10000h + 10000h;文件加载器所处的内存空间结尾，这段内存的结束地址必须要大于文件加载器的结尾
+;mov edx,0
+call 从空闲内存表中分割和保留内存段
+jc 文件加载器所在的内存空间已被占用
+
+mov esi,100000h
+mov edi,0
+mov eax,200000h;保留1MB到2MB处共1MB大小的内存，这是Kernelinitialize内核套件初始化程序所处的内存
+mov edx,0
+call 从空闲内存表中分割和保留内存段
+jc 内核套件初始化程序所在的内存空间已被占用
+
+mov di,[esp + 已排序的空闲内存表结束]
 
 
 
@@ -415,30 +448,30 @@ rep stosd
 lea eax,[edi + 最小页大小 + initialize起始 + 111b];p4，PTE的位置
 ;or ax,111b
 stosd
-mov dword [di],0
-add di,4
-add eax,最小页大小;第2张表的位置
-stosd
+mov dword[di],0
 ;mov dword[di],0
 ;add di,4
 mov eax,0
-mov cx,最小页大小 / 4 - 3
+mov cx,最小页大小 / 4 - 1
 rep stosd
 
 ;这是p4，PTE
 ;or ax,111b
-mov dword[di],initialize起始 + 段地址乘数 + 111b;物理地址的位置;映射第1页内存到1MB处
+mov dword[di],最小页大小 * 1 + 111b;物理地址的位置;映射第1页内存到1MB处
 mov dword[di + 4],0
 add di,8
-mov eax,最小页大小 + 111b;开始正常映射内存，但由于第1张页表映射了其他地方，所以我们不能访问实模式的中断描述符表了
+mov eax,0
+mov cx,(10_0000h / 最小页大小 - 1) * 8 / 4;不映射前1MB的内存，- 1是因为上面已经STOSQ一次了
+rep stosd
+mov eax,initialize起始 + 段地址乘数 + 111b;开始正常映射内存
 ;or ax,111b
-mov cx,20_0000h / 最小页大小 - 1;前2MB的内存，- 1因为上面已经STOSQ一次了
+mov cx,10_0000h / 最小页大小;映射从1MB处开始的内存
 
 构建本程序的物理地址项:
- stosd
- mov dword[di],0
+ mov [di],eax
+ mov dword[di + 4],0
  add eax,最小页大小
- add di,4
+ add di,8
 loop 构建本程序的物理地址项
 
 
@@ -465,30 +498,29 @@ rep stosd
 lea eax,[edi + initialize起始 + 最小页大小 + 111b];p1，PTE的地址
 ;or ax,111b
 stosd
-mov dword[di],0
-add di,4
-add eax,最小页大小;第2张表的地址
-stosd
 mov eax,0
-mov cx,最小页大小 / 4 - 3;-3是因为上面已经STOSD3次了
+mov cx,最小页大小 / 4 - 1;-1是因为上面已经STOSD1次了
 rep stosd
 
 ;这是p1，PTE
-mov eax,MemoryManager起始 + 111b;物理内存的地址
+mov dword[di],最小页大小 * 2 + 111b;物理地址的位置;映射第1页内存到1MB处
+mov dword[di + 4],0
+add di,8
+mov eax,MemoryManager起始 + 最小页大小 * 1 + 111b;物理内存的地址
 ;or ax,111b
-mov cx,20_0000h / 最小页大小;共映射2MB内存
+mov cx,20_0000h / 最小页大小 - 1;共映射2MB内存，- 1是因为上面已经STOSD1次了
 
-构建内存管理进程的物理地址项:
- stosd
- mov dword[di],0
+构建内存管理进程的物理地址条目:
+ mov [di],eax
+ mov dword[di + 4],0
  add eax,最小页大小
- add di,4
-loop 构建内存管理进程的物理地址项
+ add di,8
+loop 构建内存管理进程的物理地址条目
 ;当光标到达行底时应该做点什么，比如准备更大的缓冲区以减少字符移动次数来加快滚动
 
 
 
-mov dword[ContinueAddress],初始化内存管理进程 + initialize起始
+;mov dword[ContinueAddress],初始化内存管理进程 + initialize起始
 mov ecx,0c0000080h;EFER MSR
 rdmsr;将会修改EAX和EDX寄存器
 or eax,1_00000000b;启用长模式
@@ -496,13 +528,11 @@ wrmsr
 mov eax,cr4;https://www.cnblogs.com/onetrainee/p/12738275.html
 or eax,1010_0000b;启用物理地址扩展PhysicalAddressExtension，PAE与A20门类似都是打开线路连接以支持更多的内存访问，PageGlobalEnabled全局页启用，PGE是启用全局页条目的支持开关，当修改CR3寄存器时那些带有全局属性的页条目将不会从TLB页表缓存中被移除和覆盖
 mov cr4,eax
-jmp 切换到长模式
+call 切换到长模式
 
 
 bits 64
 初始化内存管理进程:
-;mov word[实模式代码的位置+initialize起始],fpfs
-;jmp 切换到实模式
 
 TSS项起始 equ 0;https://os.phil-opp.com/double-fault-exceptions/#the-ist-and-tss
 TSS预留的_1 equ TSS项起始 + 0
@@ -619,7 +649,7 @@ mov dword[TSS指针表起始 + initialize起始 + 12],0;预留
 
 mov ax,TSS指针表起始 - 全局描述表起始
 ltr ax
-
+mov ebx,[—64位中断描述符表指针 + 2 + initialize起始]
 
 ;当表内中间的一项或多项条目释放后会产生空洞，需要移动内容来覆盖空洞，如果频繁移动会影响性能，我想可以新建另一个表来保存这些空洞的位置，下次写入表就直接往这些空洞里写，满一页合并这些内容以释放内存页
 mov byte[系统调用表起始 + 系统调用项属性 + 系统调用项大小 * 1],1;进程属性
@@ -641,9 +671,7 @@ mov qword[线程控制块起始 + RiP寄存器 + 线程控制块大小 * 2],4096
 
 ;mov [edi - 8 * 2],rax;调度中心进程控制表指针
 
-mov eax,ebx
-mov ebx,0
-call VMMU
+
 ;mov qword[edi + 1],rbx;内存管理的页表指针
 ;mov eax,edi
 ;sub eax,[线程控制表起始 + initialize起始]
@@ -708,13 +736,13 @@ mov al,0;清零此段
 mov cl,中断描述符表起始 - 切换页表 - (调度中心跳转头结束 - 调度中心跳转头起始)
 rep stosb
 mov esi,跳板起始 + initialize起始
-mov edi,MemoryManager起始
-mov cx,内核结束 - 跳板起始
+mov edi,最小页大小 * 2
+mov cx,跳板结束 - 跳板起始
 rep movsb
-mov qword[MemoryManager起始 + 最小页大小 - 24],最小页大小
+mov qword[最小页大小 * 2 + 最小页大小 - 24],最小页大小
 mov rax,cr3
-mov [MemoryManager起始 + 最小页大小 - 16],rax;调度中心的CR3
-mov qword[MemoryManager起始 + 最小页大小 - 8],1;进程序号
+mov [最小页大小 * 2 + 最小页大小 - 16],rax;调度中心的CR3
+mov qword[最小页大小 * 2 + 最小页大小 - 8],1;进程序号
 mov r11d,ebx;内存管理进程的CR3
 mov ecx,4096
 mov esp,4096 - 40
@@ -906,8 +934,6 @@ jmp $
 
 
 
-
-
 ;我需要使用共享内表来保存共享内存的状态吗
 ;我想我需要一个表来保存系统调用时的共享内存起始指针，用于传递参数
 ;然后其他的东西我不需要保存，让应用程序来自行管理自己的内存，因为共享内存跟普通内存没有太大区别，我只需要记录共享次数来决定是否释放即可
@@ -944,8 +970,8 @@ jmp $
 
 ;https://zhuanlan.zhihu.com/p/652983618 https://wiki.osdev.org/User:Foliagecanine/Paging_in_Long_Mode
 ;将会修改RAX，RBX，RCX寄存器
-;输入RAX内存映射表起始，RBX虚拟地址
-;输出RBX物理地址
+;输入RAX内存映射表物理地址起始，RBX虚拟地址
+;输出RAX物理地址
 VMMU:;手动实现MMU
 mov ecx,0;清空RCX寄存器
 ;第1层页表
@@ -953,7 +979,7 @@ rol rbx,16 + 9;把第1次需要的9位移下来
 and ax,1111_0000_00000000b;清空AX低12位
 mov cx,bx
 and ch,0000_0001b;清空不需要的位因为页表内寻址只需要9位
-mov rax,[rax + rcx]
+mov rax,[rax + rcx * 8]
 ;test al,0;检查P存在位
 ;jz $
 
@@ -965,7 +991,7 @@ and ax,1111_0000_00000000b;清空AX低12位
 rol rbx,9;把第2次需要的9位移下来
 mov cx,bx
 and ch,0000_0001b;清空不需要的位因为页表内寻址只需要9位
-mov rax,[rax + rcx]
+mov rax,[rax + rcx * 8]
 ;test al,0;检查P存在位
 ;jz $
 
@@ -977,7 +1003,7 @@ and ax,1111_0000_00000000b;清空AX低12位
 rol rbx,9;把第3次需要的9位移下来
 mov cx,bx
 and ch,0000_0001b;清空不需要的位因为页表内寻址只需要9位
-mov rax,[rax + rcx]
+mov rax,[rax + rcx * 8]
 ;test al,0;检查P存在位
 ;jz $
 
@@ -989,7 +1015,7 @@ and ax,1111_0000_00000000b;清空AX低12位
 rol rbx,9;把第4次需要的9位移下来
 mov cx,bx
 and ch,0000_0001b;清空不需要的位因为页表内寻址只需要9位
-mov rax,[rax + rcx]
+mov rax,[rax + rcx * 8]
 ;test al,0;检查P存在位
 ;jz $
 
@@ -998,8 +1024,8 @@ jnz $
 
 and ax,1111_0000_00000000b;清空AX低12位
 rol rbx,12;把第5次需要的12位移下来
-and bx,1111_11111111b;只保留BX低12位
-or ax,bx;把BX里的12位插进AX里
+and bx,0000_1111_11111111b;只保留BX低12位
+add ax,bx;把BX里的12位插进AX里
 ret
 
 
@@ -1431,7 +1457,7 @@ jmp 系统调用入口
 页错误:;#PF
 mov eax,15
 jmp 系统调用入口
-内核结束:
+跳板结束:
 
 
 ;处理64位的错误中断
@@ -1565,8 +1591,28 @@ jmp 在实模式暂停处理器
 mov si,字符串_普通的内存布局表为空
 jmp 显示字符串后暂停处理器
 
-栈大小已超出了实模式的寻址能力:
-mov si,字符串_栈大小已超出了实模式的寻址能力
+已排序的空闲内存表里没有条目:
+mov si,字符串_已排序的空闲内存表里没有条目
+jmp 显示字符串后暂停处理器
+
+
+
+
+空闲内存不是从0地址开始:
+mov si,字符串_空闲内存不是从0地址开始
+jmp 显示字符串后暂停处理器
+
+
+中断向量表所在的内存空间已被占用:
+mov si,字符串_中断向量表所在的内存空间已被占用
+jmp 显示字符串后暂停处理器
+
+文件加载器所在的内存空间已被占用:
+mov si,字符串_文件加载器所在的内存空间已被占用
+jmp 显示字符串后暂停处理器
+
+内核套件初始化程序所在的内存空间已被占用:
+mov si,字符串_内核套件初始化程序所在的内存空间已被占用
 jmp 显示字符串后暂停处理器
 
 
@@ -1574,18 +1620,115 @@ jmp 显示字符串后暂停处理器
 
 
 
+;栈大小已超出了实模式的寻址能力:
+;mov si,字符串_栈大小已超出了实模式的寻址能力
+;jmp 显示字符串后暂停处理器
+
+
+
+
+;将会修改AX，BX，Si，Di,BP寄存器
+;输入BX空闲内存表起始地址，ESi需要保留的内存起始地址低位，EDi需要保留的内存起始地址高位，EAX需要保留的内存结束地址低位，EDX需要保留的内存结束地址高位，BX已排序的空闲内存表，ESP+已排序的空闲内存表结束
+;输出FC标志位置1表示要保留的内存空间不存在或已被占用
+搜索要保留的内存空间所在的内存段:
+ add bx,8 * 2
+ cmp bx,[esp + 2 + 已排序的空闲内存表结束]
+ jz 没有搜索到要保留的内存空间所在的内存段;已排序的空闲内存表已耗尽
+
+ 从空闲内存表中分割和保留内存段:
+ mov ecx,[bx];起始地址加上长度，现在EAX+EDX里保存了这段内存的结束地址
+ mov ebp,[bx + 4]
+ add ecx,[bx + 8]
+ adc ebp,[bx + 8 + 4];如果产生了进位则要把进位传递到高32位
+ cmp ebp,edx;先判断高位，如果高位已大于需要判断的值则退出循环
+ jb 搜索要保留的内存空间所在的内存段;高位小于则不必判断低位了
+
+ ja 这段内存似乎涵盖了要保留的内存空间
+
+ cmp ecx,eax
+jb 搜索要保留的内存空间所在的内存段;循环以继续搜索
+
+这段内存似乎涵盖了要保留的内存空间:
+sub esi,[bx]
+sbb edi,[bx + 4]
+jb 要保留的内存空间起始部分已被占用
+
+jnz 不检查要保留的内存空间起始地址低位是否为零
+
+cmp esi,0
+jz 要保留的内存空间已占据这段内存的起始部分
+
+不检查要保留的内存空间起始地址低位是否为零:
+mov [bx + 8],esi
+mov [bx + 8 + 4],edi
+sub ecx,eax
+sbb ebp,edx
+jb 要保留的内存空间起始部分已被占用;要保留的内存空间结束部分已被占用
+
+jnz 不检查要保留的内存空间结束地址低位是否为零
+
+cmp ecx,0
+jz 要保留的内存空间起始部分已被占用;要保留的内存空间已占据这段内存的结束部分，直接返回
+
+不检查要保留的内存空间结束地址低位是否为零:
+push cx;保留CX
+mov si,[esp + 2 + 2 + 已排序的空闲内存表结束]
+mov cx,si
+;lea di,[bx + 8 * 2];把前面的空闲条目往更前面挪以空出一个槽位用于保存分割出来的新条目
+add bx,8 * 2;指向新空出来的槽位
+lea di,[si + 8 * 2];空出一个条目的大小
+sub cx,bx
+mov [esp + 2 + 2 + 已排序的空闲内存表结束],di
+shr cx,2; ÷ 4最大化复制
+sub si,4;修正差一错误
+sub di,4;修正差一错误
+std;倒序复制
+rep movsd
+cld;恢复正向
+pop cx;恢复CX
+jmp 跳过下面的再次判断文件加载器是否已覆盖这段内存的结束部分
+
+要保留的内存空间已占据这段内存的起始部分:
+sub ecx,eax
+sbb ebp,edx
+jb 要保留的内存空间起始部分已被占用;要保留的内存空间结束部分已被占用
+
+jnz 跳过下面的再次判断文件加载器是否已覆盖这段内存的结束部分;不检查要保留的内存空间结束地址低位是否为零
+
+cmp ecx,0
+jz 移除这个已被完全占据的空闲内存条目;要保留的内存空间已占据这段内存的结束部分
+
+跳过下面的再次判断文件加载器是否已覆盖这段内存的结束部分:;构建一个新的空闲内存条目
+mov [bx],eax;内存起始地址低32位
+mov [bx + 4],edx;内存起始地址高32位
+mov [bx + 8],ecx;内存大小低32
+mov [bx + 8 + 4],ebp;内存大小高32
+;clc;进位已被上面的SBB指令清除
+
+要保留的内存空间起始部分已被占用:;CF标志位已被SBB指令置1
+ret
+
+移除这个已被完全占据的空闲内存条目:
+mov si,bx;覆盖这个已经被完全占据的条目
+lea di,[bx - 8 * 2];覆盖一个条目的大小
+mov cx,[esp + 2 + 已排序的空闲内存表结束]
+sub cx,bx
+shr cx,2; ÷ 4最大化复制
+rep movsd
+mov [esp + 2 + 已排序的空闲内存表结束],di
+ret
+
+没有搜索到要保留的内存空间所在的内存段:
+stc
+ret
+
+
+
 ;将会修改EAX，ESP，CS，GDTR，iDTR，CR0寄存器
-;输入ContinueAddress长模式跳转地址
+;无输入
 ;输出
 ;https://wiki.osdev.org/Talk:Entering_Long_Mode_Directly
 切换到长模式:
-;mov ax,0
-;mov ds,ax
-;mov es,ax
-;mov fs,ax
-;mov gs,ax
-;mov ss,ax
-
 mov eax,cr0
 or eax,1000000000000000_0000000000000001b;通过同时启用PG分页和PE保护
 cli;拒收硬件中断
@@ -1595,31 +1738,23 @@ jmp dword —64位代码段 - 全局描述表起始 : LongMode + initialize起�
 
 bits 64
 LongMode:
-mov eax,ss;顺便清空EAX高位
-shl eax,4; × 16
-add esp,eax;加上段地址，转换成平坦的栈形式值
+;mov eax,ss;顺便清空EAX高位
+;shl eax,4; × 16
+add esp,initialize起始;eax;加上段地址，转换成无分段的平坦栈形式值
 lidt [—64位中断描述符表指针 + initialize起始];我迫切地需要知道发生什么错误
-;mov ax,0;长模式数据段 - 全局描述表起始
-;mov ds,ax
-;mov es,ax
-;mov fs,ax
-;mov gs,ax
-;mov ss,ax
-
-jmp qword[rel + ContinueAddress]
+movzx eax,al;清空RAX高位
+pop ax
+add eax,initialize起始
+push rax
+ret;jmp qword[rel + ContinueAddress]
 
 
 
 ;将会修改EAX，ECX，ESP，CS，iDTR，CR0，CR4寄存器
-;输入实模式代码的位置即跳转地址
-;无输出
-;https://wasm.in/threads/perexod-v-long-mode-i-obratno.29057/ https://board.flatassembler.net/topic.php?p=165470 https://github.com/reactos/reactos/blob/master/boot/freeldr/freeldr/arch/amd64/entry.S https://documentation.help/Asmc-Macro-Assembler/AB03.htm https://www.codeproject.com/articles/The-Real-Protected-Long-mode-assembly-tutorial-for#comments-section
+;无输入
+;输出
+;https://github.com/Zeal-Operating-System/ZealOS/blob/eee210f4379ba3d00b47507f336a158eefb2c993/src/Kernel/KStart64.ZC https://wasm.in/threads/perexod-v-long-mode-i-obratno.29057/ https://board.flatassembler.net/topic.php?p=165470 https://github.com/reactos/reactos/blob/master/boot/freeldr/freeldr/arch/amd64/entry.S https://documentation.help/Asmc-Macro-Assembler/AB03.htm https://www.codeproject.com/articles/The-Real-Protected-Long-mode-assembly-tutorial-for#comments-section
 切换到实模式:
-;mov ax,实模式数据段 - 全局描述表起始
-;mov ds,ax
-;mov es,ax
-;mov fs,ax
-;mov gs,ax
 jmp dword far [rel —32位代码指针];nasm.exe编译器不支持jmp fword ptr [mem]这个写法，我先用其他编译器把这个写法编译成二进制文件，然后用ndisasm.exe反编译就得到了nasm.exe所支持的写法
 
 —32位代码指针:
@@ -1652,33 +1787,15 @@ mov cr0,eax
 
 InRealMode:
 lidt cs:[中断向量表指针];16位的中断描述符表
-;mov ax,cs;initialize起始/16
-;mov ds,ax
-;mov es,ax
-;mov fs,ax
-;mov gs,ax
-;mov ss,ax
-cmp esp,10FFeFh
-ja 栈大小已超出了实模式的寻址能力;大于则跳转
-
-cmp esp,0F0000h
-ja 不能使用单一段值;大于则跳转
-
-mov eax,esp
-shr eax,4;转换成实模式的段值
-and ax,1111_0000_00000000b;清空AX低12位
+mov ax,initialize起始 / 段地址乘数
 mov ss,ax
-movzx esp,sp;清空ESP高位
-jmp 栈已转换成实模式的
-
-不能使用单一段值:
-mov ax,0FFFFh;需要使用下面的3个F了
-mov ss,ax
-sub esp,0FFFF0h;减去段地址
-
-栈已转换成实模式的:
+sub esp,initialize起始;减去段地址
+pop ax
+add sp,8 - 2;sub sp,2;移除压入的返回地址，但保留两个空位用于保存新的返回地址
+sub ax,段地址乘数
+push ax
 sti;接收硬件中断
-jmp word[cs : 实模式代码指针]
+ret;jmp word[cs : 实模式代码指针]
 
 
 
@@ -1751,6 +1868,15 @@ Message_NoLongMode db 13,10,'Long mode is not supported',0;ZealOS requires a 64-
 字符串_eax0e820hint15hAnerroroccurred db 13,10,'EAX 0e820h int 15h An error occurred',0
 字符串_普通的内存布局表为空 db 13,10,'The normal memory layout table is empty',0
 字符串_没有搜索到空闲内存条目 db 13,10,'No free memory entries were found',0
+字符串_已排序的空闲内存表里没有条目 db 13,10,'There are no entries in the sorted free memory table.',0
+
+字符串_空闲内存不是从0地址开始 db 13,10,'The obtained memory layout is incorrect,free memory does not start from address 0',0
+
+字符串_中断向量表所在的内存空间已被占用 db 13,10,'The memory space where the interrupt vector table is located has been occupied.',0
+字符串_文件加载器所在的内存空间已被占用 db 13,10,'The memory space occupied by the file loader has been used.',0
+字符串_内核套件初始化程序所在的内存空间已被占用 db 13,10,'The memory space where the kernel package initializer is located has been occupied.',0
+
+
 字符串_间隔 db 13
 字符串_回车加换行 db 13
 字符串_换行 db 10,0
@@ -1765,7 +1891,7 @@ Message_NoLongMode db 13,10,'Long mode is not supported',0;ZealOS requires a 64-
 字符串_页错误 db 13,10,'Page Fault',0
 字符串_OSHAL db 'OPERATINGSYSTEM/HARDWAREABSTRACTIONLAYER/',0
 字符串_MEM db 'MEMORYMANAGER.BIN',0
-字符串_栈大小已超出了实模式的寻址能力 db 13,10,'The stack size has exceeded the addressing capability of real mode.',0
+;字符串_栈大小已超出了实模式的寻址能力 db 13,10,'The stack size has exceeded the addressing capability of real mode.',0
 
 
 全局描述表指针:;Global Descriptor Table
