@@ -1,292 +1,250 @@
-//https://x.com/i/grok/share/fTR2xcxk4VTtwYUiWzd0NY0sw
+// https://x.com/i/grok/share/fTR2xcxk4VTtwYUiWzd0NY0sw
+// Notepad++ 插件，用于在 Assembly 文件中将中文字符替换为对应的英文字符（如全角逗号替换为半角逗号）
+// 支持 .asm 和 .inc 文件，仅在非注释区域进行替换，支持调试消息输出
+
 #include "C:\Users\Administrator\Desktop\notepad-plus-plus-master\PowerEditor\src\MISC\PluginsManager\PluginInterface.h"
 #include "C:\Users\Administrator\Desktop\notepad-plus-plus-master\lexilla\include\SciLexer.h"
 #include "C:\Users\Administrator\Desktop\notepad-plus-plus-master\scintilla\include\Scintilla.h"
 #include <windows.h>
+#include <tchar.h>
+#include <unordered_map>
+#include <string> // 添加 string 头文件以支持 std::string
 
-#define SCI_SETLEXER 4002
 #define SCLEX_ASM 34
-#define SCE_ASM_DEFAULT 0
 #define SCE_ASM_COMMENT 1
-#define SCE_ASM_INSTRUCTION 3
 
-const TCHAR* pluginName = TEXT("AsmCharReplacePlugin");// 插件名称
-NppData nppData;// Notepad++ 数据
-bool isEnabled = true;// 插件开关
-bool isDebugMessagesEnabled = false;// 调试消息框开关
-FuncItem funcItem[2];// 插件功能列表
+// 插件全局变量
+const TCHAR* pluginName = TEXT("AsmCharReplacePlugin");
+NppData nppData = {0}; 
+bool isEnabled = true; 
+bool isDebugMessagesEnabled = false; 
+FuncItem funcItem[2] = {0}; 
 
-// 切换插件功能的函数
-void togglePlugin()
-{
+// 中文字符映射表
+struct CharMapping {
+    const char* utf8; 
+    char replacement; 
+    const TCHAR* name; 
+};
+
+const CharMapping charMappings[] = {
+    { "\xEF\xBC\x8C", ',', TEXT("，") }, // 全角逗号
+    { "\xE3\x80\x90", '[', TEXT("【") }, 
+    { "\xE3\x80\x91", ']', TEXT("】") }, 
+    { "\xEF\xBC\x9A", ':', TEXT("：") }, 
+    { "\xEF\xBC\x9B", ';', TEXT("；") }, 
+    { "\xE3\x80\x81", '/', TEXT("、") }, 
+    { "\xE3\x80\x82", '.', TEXT("。") }, 
+    { "\xEF\xBF\xA5", '$', TEXT("￥") }, 
+    { "\xE2\x80\x98", '\'', TEXT("‘") }, 
+    { "\xE2\x80\x99", '\'', TEXT("’") }, 
+    { "\xEF\xBC\x88", '(', TEXT("（") }, 
+    { "\xEF\xBC\x89", ')', TEXT("）") }, 
+    { "\xE2\x80\x9C", '"', TEXT("“") }, 
+    { "\xE2\x80\x9D", '"', TEXT("”") }  
+};
+const size_t numMappings = sizeof(charMappings) / sizeof(charMappings[0]);
+
+// 文件状态缓存
+static bool isCurrentFileAssembly = false; 
+static bool isCacheValid = false; 
+static TCHAR lastFilePath[MAX_PATH] = { 0 }; 
+
+static std::unordered_map<std::string, CharMapping> charMap;
+
+// ==================== 函数声明（前置声明） ====================
+HWND GetCurrentScintilla();
+void initCharMap();
+bool checkFileExtension(const TCHAR* filePath);
+void updateFileAssemblyStatus();
+bool isAssemblyLanguage(HWND scintillaHandle);
+void handleNotification(SCNotification* notifyCode);
+
+void togglePlugin();
+void toggleDebugMessages();
+void pluginInit(HANDLE hModule);
+void pluginClean();
+
+// ==================== 辅助函数 ====================
+
+HWND GetCurrentScintilla() {
+    int which = -1;
+    SendMessage(nppData._nppHandle, NPPM_GETCURRENTSCINTILLA, 0, (LPARAM)&which);
+    return (which == 0) ? nppData._scintillaMainHandle : nppData._scintillaSecondHandle;
+}
+
+void initCharMap() {
+    charMap.clear();
+    for (size_t i = 0; i < numMappings; ++i) {
+        charMap[std::string(charMappings[i].utf8, 3)] = charMappings[i];
+    }
+}
+
+bool checkFileExtension(const TCHAR* filePath) {
+    if (!filePath || !*filePath) return false;
+    size_t len = _tcslen(filePath);
+    const TCHAR* extensions[] = { TEXT(".asm"), TEXT(".inc") };
+    for (const TCHAR* ext : extensions) {
+        size_t extLen = _tcslen(ext);
+        if (len >= extLen && _tcsicmp(filePath + len - extLen, ext) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void updateFileAssemblyStatus() {
+    TCHAR filePath[MAX_PATH] = { 0 };
+    SendMessage(nppData._nppHandle, NPPM_GETFULLCURRENTPATH, MAX_PATH, (LPARAM)filePath);
+
+    if (_tcscmp(filePath, lastFilePath) == 0 && isCacheValid) 
+        return;
+
+    _tcscpy_s(lastFilePath, MAX_PATH, filePath);
+    isCurrentFileAssembly = checkFileExtension(filePath);
+
+    if (!isCurrentFileAssembly && filePath[0] == 0) {
+        TCHAR fileName[MAX_PATH] = { 0 };
+        SendMessage(nppData._nppHandle, NPPM_GETFILENAME, MAX_PATH, (LPARAM)fileName);
+        isCurrentFileAssembly = checkFileExtension(fileName);
+    }
+
+    isCacheValid = true;
+
+    if (!isCurrentFileAssembly && isDebugMessagesEnabled) {
+        MessageBox(nppData._nppHandle, TEXT("Not an Assembly file"), TEXT("Debug"), MB_OK);
+    }
+}
+
+bool isAssemblyLanguage(HWND scintillaHandle) {
+    if (!isCacheValid) {
+        updateFileAssemblyStatus();
+    }
+    if (!isCurrentFileAssembly) {
+        if (isDebugMessagesEnabled) {
+            MessageBox(nppData._nppHandle, TEXT("Not an Assembly file"), TEXT("Debug"), MB_OK);
+        }
+        return false;
+    }
+    int lexer = (int)SendMessage(scintillaHandle, SCI_GETLEXER, 0, 0);
+    return (lexer == SCLEX_ASM);
+}
+
+// ==================== 菜单功能 ====================
+
+void togglePlugin() {
     isEnabled = !isEnabled;
     if (isDebugMessagesEnabled) {
         MessageBox(nppData._nppHandle, isEnabled ? TEXT("Plugin Enabled") : TEXT("Plugin Disabled"), TEXT("AsmCharReplacePlugin"), MB_OK);
     }
 }
 
-// 切换调试消息框的函数
-void toggleDebugMessages()
-{
+void toggleDebugMessages() {
     isDebugMessagesEnabled = !isDebugMessagesEnabled;
     MessageBox(nppData._nppHandle, isDebugMessagesEnabled ? TEXT("Debug Messages Enabled") : TEXT("Debug Messages Disabled"), TEXT("AsmCharReplacePlugin"), MB_OK);
 }
 
-// 初始化功能列表
-void initMenu()
-{
-    funcItem[0]._pFunc = togglePlugin;
-    lstrcpy(funcItem[0]._itemName, TEXT("Toggle Replace"));
-    funcItem[0]._init2Check = false;
-    funcItem[0]._pShKey = NULL;
-
-    funcItem[1]._pFunc = toggleDebugMessages;
-    lstrcpy(funcItem[1]._itemName, TEXT("Toggle Debug Messages"));
-    funcItem[1]._init2Check = false;
-    funcItem[1]._pShKey = NULL;
-
-    if (isDebugMessagesEnabled) {
-        MessageBox(nppData._nppHandle, TEXT("Menu Initialized"), TEXT("AsmCharReplacePlugin"), MB_OK);
+// 处理通知
+void handleNotification(SCNotification* notifyCode) {
+    if (notifyCode->nmhdr.code == NPPN_FILEOPENED || 
+        notifyCode->nmhdr.code == NPPN_BUFFERACTIVATED) {
+        isCacheValid = false;
+        updateFileAssemblyStatus();
+        return;
     }
-}
 
-// 检查当前文件是否为 Assembly 语言
-bool isAssemblyLanguage(HWND scintillaHandle)
-{
-    int lexer = static_cast<int>(SendMessage(scintillaHandle, SCI_GETLEXER, 0, 0));
-    if (lexer != SCLEX_ASM)
-    {
-        SendMessage(scintillaHandle, SCI_SETLEXER, SCLEX_ASM, 0);
-        SendMessage(scintillaHandle, SCI_STYLESETFORE, SCE_ASM_COMMENT, RGB(0, 128, 0));
-        SendMessage(scintillaHandle, SCI_COLOURISE, 0, -1);
+    if (!isEnabled || notifyCode->nmhdr.code != SCN_CHARADDED) 
+        return;
+
+    HWND scintillaHandle = GetCurrentScintilla();
+    if (!scintillaHandle || !IsWindow(scintillaHandle)) return;
+
+    if (!isAssemblyLanguage(scintillaHandle)) {
+        return;
+    }
+
+    Sci_Position currentPos = (Sci_Position)SendMessage(scintillaHandle, SCI_GETCURRENTPOS, 0, 0);
+    if (currentPos < 3) return;
+
+    if (SendMessage(scintillaHandle, SCI_GETCODEPAGE, 0, 0) != SC_CP_UTF8) {
         if (isDebugMessagesEnabled) {
-            MessageBox(nppData._nppHandle, TEXT("Lexer set to SCLEX_ASM"), TEXT("Debug"), MB_OK);
-        }
-    }
-    return (lexer == SCLEX_ASM);
-}
-
-
-// 处理 Scintilla 通知
-void handleNotification(SCNotification* notifyCode)
-{
-    if (!isEnabled || notifyCode->nmhdr.code != SCN_CHARADDED) return;
-
-    HWND scintillaHandle = nppData._scintillaMainHandle;
-    if (!scintillaHandle)
-    {
-        scintillaHandle = nppData._scintillaSecondHandle;
-        if (!scintillaHandle)
-        {
-            if (isDebugMessagesEnabled) {
-                MessageBox(nppData._nppHandle, TEXT("Invalid Scintilla handle"), TEXT("Debug"), MB_OK);
-            }
-            return;
-        }
-    }
-
-
-    SendMessage(scintillaHandle, SCI_COLOURISE, 0, -1);// 强制重新着色以确保样式更新
-
-    // 获取当前位置
-    Sci_Position currentPos = static_cast<Sci_Position>(SendMessage(scintillaHandle, SCI_GETCURRENTPOS, 0, 0));
-    if (currentPos < 3)
-    {
-        if (isDebugMessagesEnabled) {
-            MessageBox(nppData._nppHandle, TEXT("Position too early for 3-byte character"), TEXT("Debug"), MB_OK);
+            MessageBox(nppData._nppHandle, TEXT("Non-UTF8 encoding detected"), TEXT("Debug"), MB_OK);
         }
         return;
     }
 
-    // 获取前3个字节（足以存储中文字符的UTF-8编码）
-    char buffer[4] = { 0 };
-    buffer[0] = static_cast<char>(SendMessage(scintillaHandle, SCI_GETCHARAT, currentPos - 3, 0));
-    buffer[1] = static_cast<char>(SendMessage(scintillaHandle, SCI_GETCHARAT, currentPos - 2, 0));
-    buffer[2] = static_cast<char>(SendMessage(scintillaHandle, SCI_GETCHARAT, currentPos - 1, 0));
+    char buffer[4] = {0};
+    buffer[0] = (char)SendMessage(scintillaHandle, SCI_GETCHARAT, currentPos - 3, 0);
+    buffer[1] = (char)SendMessage(scintillaHandle, SCI_GETCHARAT, currentPos - 2, 0);
+    buffer[2] = (char)SendMessage(scintillaHandle, SCI_GETCHARAT, currentPos - 1, 0);
 
-    // 调试：显示buffer内容
-    if (isDebugMessagesEnabled) {
-        TCHAR debugMsg[256];
-        wsprintf(debugMsg, TEXT("Buffer: %02X %02X %02X, Pos: %d"),
-            (unsigned char)buffer[0], (unsigned char)buffer[1], (unsigned char)buffer[2], (int)currentPos);
-        MessageBox(nppData._nppHandle, debugMsg, TEXT("Debug"), MB_OK);
-    }
+    auto it = charMap.find(std::string(buffer, 3));
+    if (it == charMap.end()) return;
 
-    // 检查中文字符
-    bool isComma = (buffer[0] == (char)0xEF && buffer[1] == (char)0xBC && buffer[2] == (char)0x8C); // ，
-    bool isSemicolon = (buffer[0] == (char)0xEF && buffer[1] == (char)0xBC && buffer[2] == (char)0x9B); // ；
-    bool isPeriod = (buffer[0] == (char)0xE3 && buffer[1] == (char)0x80 && buffer[2] == (char)0x82); // 。
+    char replaceChar = it->second.replacement;
+    const TCHAR* charName = it->second.name;
 
-    bool isYen      = (buffer[0] == (char)0xEF && buffer[1] == (char)0xBF && buffer[2] == (char)0xA5); // ￥
-    bool isLeftSingleQuote  = (buffer[0] == (char)0xE2 && buffer[1] == (char)0x80 && buffer[2] == (char)0x98); // ‘
-    bool isRightSingleQuote = (buffer[0] == (char)0xE2 && buffer[1] == (char)0x80 && buffer[2] == (char)0x99); // ’
-    bool isLeftParen  = (buffer[0] == (char)0xEF && buffer[1] == (char)0xBC && buffer[2] == (char)0x88); // （
-    bool isRightParen = (buffer[0] == (char)0xEF && buffer[1] == (char)0xBC && buffer[2] == (char)0x89); // ）
-    bool isLeftDoubleQuote  = (buffer[0] == (char)0xE2 && buffer[1] == (char)0x80 && buffer[2] == (char)0x9C); // “
-    bool isRightDoubleQuote = (buffer[0] == (char)0xE2 && buffer[1] == (char)0x80 && buffer[2] == (char)0x9D); // ”
+    Sci_Position start = (currentPos > 50) ? currentPos - 50 : 0;
+    SendMessage(scintillaHandle, SCI_COLOURISE, start, currentPos + 10);
 
-    char replaceChar = 0;
-    const TCHAR* charName = nullptr;
+    int styleAtEnd = (int)SendMessage(scintillaHandle, SCI_GETSTYLEAT, currentPos - 1, 0);
 
-    if (isComma)
-    {
-        replaceChar = ',';
-        charName = TEXT("，");
-    }
-    else if (isSemicolon)
-    {
-        replaceChar = ';';
-        charName = TEXT("；");
-    }
-    else if (isPeriod)
-    {
-        replaceChar = '.';
-        charName = TEXT("。");
-    }
-
-    else if (isYen)
-    {
-        replaceChar = '$';
-        charName = TEXT("￥");
-    }
-    else if (isLeftSingleQuote)
-    {
-        replaceChar = '\'';
-        charName = TEXT("‘");
-    }
-    else if (isRightSingleQuote)
-    {
-        replaceChar = '\'';
-        charName = TEXT("’");
-    }
-    else if (isLeftParen)
-    {
-        replaceChar = '(';
-        charName = TEXT("（");
-    }
-    else if (isRightParen)
-    {
-        replaceChar = ')';
-        charName = TEXT("）");
-    }
-    else if (isLeftDoubleQuote)
-    {
-        replaceChar = '"';
-        charName = TEXT("“");
-    }
-    else if (isRightDoubleQuote)
-    {
-        replaceChar = '"';
-        charName = TEXT("”");
-    }
-
-
-    if (replaceChar)
-    {
-        if (!isAssemblyLanguage(scintillaHandle))
-        {
-            if (isDebugMessagesEnabled) {
-                MessageBox(nppData._nppHandle, TEXT("Not an Assembly file"), TEXT("Debug"), MB_OK);
-            }
-            return;
-        }
-
-        // 检查多个位置的样式，确保准确判断注释
-        int styleAtStart = static_cast<int>(SendMessage(scintillaHandle, SCI_GETSTYLEAT, currentPos - 3, 0));
-        int styleAtMiddle = static_cast<int>(SendMessage(scintillaHandle, SCI_GETSTYLEAT, currentPos - 2, 0));
-        int styleAtEnd = static_cast<int>(SendMessage(scintillaHandle, SCI_GETSTYLEAT, currentPos - 1, 0));
-
+    if (styleAtEnd != SCE_ASM_COMMENT) {
         if (isDebugMessagesEnabled) {
             TCHAR debugMsg[256];
-            wsprintf(debugMsg, TEXT("Styles: Start=%d, Middle=%d, End=%d, IsComment=%d"),
-                styleAtStart, styleAtMiddle, styleAtEnd, styleAtStart == SCE_ASM_COMMENT || styleAtMiddle == SCE_ASM_COMMENT || styleAtEnd == SCE_ASM_COMMENT);
-            MessageBox(nppData._nppHandle, debugMsg, TEXT("Debug"), MB_OK);
+            wsprintf(debugMsg, TEXT("Replacing %s with %c"), charName, replaceChar);
+            MessageBox(nppData._nppHandle, debugMsg, TEXT("AsmCharReplacePlugin"), MB_OK);
         }
 
-        if (styleAtStart != SCE_ASM_COMMENT && styleAtMiddle != SCE_ASM_COMMENT && styleAtEnd != SCE_ASM_COMMENT)
-        {
-            if (isDebugMessagesEnabled) {
-                TCHAR debugMsg[256];
-                wsprintf(debugMsg, TEXT("Replacing %s with %c"), charName, replaceChar);
-                MessageBox(nppData._nppHandle, debugMsg, TEXT("AsmCharReplacePlugin"), MB_OK);
-            }
-
-            // 删除中文字符（UTF-8编码占3字节）
-            SendMessage(scintillaHandle, SCI_BEGINUNDOACTION, 0, 0);
-            SendMessage(scintillaHandle, SCI_SETSEL, currentPos - 3, currentPos);
-            SendMessage(scintillaHandle, SCI_CLEAR, 0, 0);
-            SendMessage(scintillaHandle, SCI_ADDTEXT, 1, (LPARAM)&replaceChar);
-            SendMessage(scintillaHandle, SCI_ENDUNDOACTION, 0, 0);
-
-            if (isDebugMessagesEnabled) {
-                MessageBox(nppData._nppHandle, TEXT("Replacement attempted"), TEXT("Debug"), MB_OK);
-            }
-        }
-        else
-        {
-            if (isDebugMessagesEnabled) {
-                MessageBox(nppData._nppHandle, TEXT("In comment, skipping replacement"), TEXT("Debug"), MB_OK);
-            }
-        }
+        SendMessage(scintillaHandle, SCI_BEGINUNDOACTION, 0, 0);
+        SendMessage(scintillaHandle, SCI_SETSEL, currentPos - 3, currentPos);
+        SendMessage(scintillaHandle, SCI_CLEAR, 0, 0);
+        SendMessage(scintillaHandle, SCI_ADDTEXT, 1, (LPARAM)&replaceChar);
+        SendMessage(scintillaHandle, SCI_ENDUNDOACTION, 0, 0);
     }
 }
 
-// 插件初始化
-void pluginInit(HANDLE /*hModule*/)
-{
-    initMenu();
-    if (isDebugMessagesEnabled) {
-        MessageBox(nppData._nppHandle, TEXT("pluginInit Called"), TEXT("AsmCharReplacePlugin"), MB_OK);
-    }
+void pluginInit(HANDLE /*hModule*/) {
+    initCharMap();
+
+    funcItem[0]._pFunc = togglePlugin;
+    lstrcpy(funcItem[0]._itemName, TEXT("Toggle Replace"));
+
+    funcItem[1]._pFunc = toggleDebugMessages;
+    lstrcpy(funcItem[1]._itemName, TEXT("Toggle Debug Messages"));
 }
 
-// 插件清理
-void pluginClean()
-{
-    // 可选：清理资源
+void pluginClean() {
+    charMap.clear();
+    isCacheValid = false;
+    lastFilePath[0] = 0;
 }
 
-// 导出函数
-extern "C" __declspec(dllexport) void setInfo(NppData notpadPlusData)
-{
-    nppData = notpadPlusData;
-    if (isDebugMessagesEnabled) {
-        MessageBox(nppData._nppHandle, TEXT("setInfo Called"), TEXT("AsmCharReplacePlugin"), MB_OK);
-    }
+// ==================== 导出函数 ====================
+
+extern "C" __declspec(dllexport) void setInfo(NppData notepadPlusData) {
+    nppData = notepadPlusData;
     pluginInit(NULL);
+    updateFileAssemblyStatus();
 }
 
-extern "C" __declspec(dllexport) const TCHAR* getName()
-{
-    if (isDebugMessagesEnabled) {
-        MessageBox(nppData._nppHandle, TEXT("getName Called"), TEXT("AsmCharReplacePlugin"), MB_OK);
-    }
+extern "C" __declspec(dllexport) const TCHAR* getName() {
     return pluginName;
 }
 
-extern "C" __declspec(dllexport) FuncItem* getFuncsArray(int* nbF)
-{
+extern "C" __declspec(dllexport) FuncItem* getFuncsArray(int* nbF) {
     *nbF = 2;
-    if (isDebugMessagesEnabled) {
-        MessageBox(nppData._nppHandle, TEXT("getFuncsArray Called"), TEXT("AsmCharReplacePlugin"), MB_OK);
-    }
     return funcItem;
 }
 
-extern "C" __declspec(dllexport) void beNotified(SCNotification* notifyCode)
-{
+extern "C" __declspec(dllexport) void beNotified(SCNotification* notifyCode) {
     handleNotification(notifyCode);
 }
 
-extern "C" __declspec(dllexport) LRESULT messageProc(UINT /*Message*/, WPARAM /*wParam*/, LPARAM /*lParam*/)
-{
+extern "C" __declspec(dllexport) LRESULT messageProc(UINT, WPARAM, LPARAM) {
     return TRUE;
 }
 
-extern "C" __declspec(dllexport) BOOL isUnicode()
-{
-    if (isDebugMessagesEnabled) {
-        MessageBox(nppData._nppHandle, TEXT("isUnicode Called"), TEXT("AsmCharReplacePlugin"), MB_OK);
-    }
+extern "C" __declspec(dllexport) BOOL isUnicode() {
     return TRUE;
 }
