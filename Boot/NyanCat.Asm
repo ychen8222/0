@@ -8,6 +8,10 @@
 ;2023年12月5日
 ;修复加载到其他地方会不运行\
 @cya
+
+;2026:10:2
+;https://github.com/NyDubh3/MEMZ/tree/master
+;https://github.com/MicroshaftCorp/TheMEMZ/tree/master
 ;————————————————————————————————————
 call $+3;+8=数据起始，确保加载到任何地方都能运行
 movzx esp,sp;清空高位
